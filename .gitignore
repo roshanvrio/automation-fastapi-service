@@ -1,1 +1,21 @@
-/__pycache__
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environment
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+
+# Environment variables
+.env
+
+# Database
+*.db
+*.sqlite3
