@@ -12,6 +12,9 @@ import re
 from datetime import datetime, date
 from sqlalchemy import func
 
+# Constants
+UNKNOWN_BOT = "Unknown Bot"
+
 app = FastAPI(title="VM Machine Status API")
 
 # Enable CORS - Allow all origins for development
@@ -44,6 +47,89 @@ def extract_vm_number(machine_name: str) -> int:
     return int(match.group(1)) if match else 0
 
 
+def get_latest_vms(db: Session):
+    """Get latest VM records from database"""
+    latest_dates = db.query(
+        VMMachine.machine_name,
+        func.max(VMMachine.created_date).label('latest_date')
+    ).group_by(VMMachine.machine_name).subquery()
+
+    return db.query(VMMachine).join(
+        latest_dates,
+        (VMMachine.machine_name == latest_dates.c.machine_name) &
+        (VMMachine.created_date == latest_dates.c.latest_date)
+    ).filter(
+        VMMachine.case_status.in_(['SUCCESS', 'EXCEPTION'])
+    ).all()
+
+
+def process_vm_records(latest_vms):
+    """Process VM records and return status dict and bot mapping"""
+    vm_status_dict = {}
+    vm_bot_mapping = {}
+
+    for vm in latest_vms:
+        if not vm.machine_name:
+            continue
+
+        vm_number = extract_vm_number(vm.machine_name)
+        if vm_number == 0:
+            continue
+
+        formatted_name = f"VM_{str(vm_number).zfill(2)}"
+        vm_status = "active" if vm.case_status == "SUCCESS" else "pending"
+        vm_bot_mapping[formatted_name] = vm.bot_id or UNKNOWN_BOT
+
+        # Prioritize 'pending' over 'active'
+        if formatted_name in vm_status_dict:
+            if vm_status == "pending":
+                vm_status_dict[formatted_name] = vm_status
+                vm_bot_mapping[formatted_name] = vm.bot_id or UNKNOWN_BOT
+        else:
+            vm_status_dict[formatted_name] = vm_status
+
+    return vm_status_dict, vm_bot_mapping
+
+
+def filter_by_status(vm_status_dict, status: Optional[str]):
+    """Filter VM status dict by requested status"""
+    if not status:
+        return vm_status_dict
+
+    status_mapping = {'active': 'SUCCESS', 'pending': 'EXCEPTION'}
+    if status.lower() not in status_mapping:
+        return vm_status_dict
+
+    requested_status = status.lower()
+    return {
+        vm: st for vm, st in vm_status_dict.items()
+        if st == requested_status
+    }
+
+
+def build_response(vm_status_dict, vm_bot_mapping, status: Optional[str]):
+    """Build final response with machine list and counts"""
+    machines_with_status = [
+        {
+            "machine_name": vm,
+            "status": st,
+            "bot_id": vm_bot_mapping.get(vm, UNKNOWN_BOT)
+        }
+        for vm, st in sorted(vm_status_dict.items())
+    ]
+
+    active_count = sum(1 for m in machines_with_status if m["status"] == "active")
+    pending_count = sum(1 for m in machines_with_status if m["status"] == "pending")
+
+    return {
+        "status": status.lower() if status else "all",
+        "total_count": len(machines_with_status),
+        "active_count": active_count,
+        "pending_count": pending_count,
+        "machines": machines_with_status
+    }
+
+
 def is_today(date_string: str) -> bool:
     """Check if a date string is from today"""
     if not date_string:
@@ -54,7 +140,7 @@ def is_today(date_string: str) -> bool:
             try:
                 record_date = datetime.strptime(date_string, fmt).date()
                 return record_date == date.today()
-            except:
+            except (ValueError, TypeError):
                 continue
 
         # If time only format (like "05:53.4"), assume it's from today
@@ -62,7 +148,7 @@ def is_today(date_string: str) -> bool:
             return True
 
         return False
-    except:
+    except Exception:
         return False
 
 
@@ -75,85 +161,62 @@ def get_vm_by_status(
     Get VM machines by CaseStatus with latest date filtering
     Returns VM status in format expected by frontend (VM_01, VM_02, etc.)
     """
-    status_mapping = {
-        'active': 'SUCCESS',
-        'pending': 'EXCEPTION'
-    }
-    
-    # Get all VMs with their latest entries
-    # Subquery to get the latest created_date for each machine
-    latest_dates = db.query(
-        VMMachine.machine_name,
-        func.max(VMMachine.created_date).label('latest_date')
-    ).group_by(VMMachine.machine_name).subquery()
-    
-    # Join to get only the latest records
-    latest_vms = db.query(VMMachine).join(
-        latest_dates,
-        (VMMachine.machine_name == latest_dates.c.machine_name) &
-        (VMMachine.created_date == latest_dates.c.latest_date)
-    ).filter(
-        VMMachine.case_status.in_(['SUCCESS', 'EXCEPTION'])
-    ).all()
-    
-    # Process VMs and format for frontend
-    vm_status_dict = {}
-    vm_bot_mapping = {}  # Store bot_id for each VM
-    
-    for vm in latest_vms:
-        if not vm.machine_name:
-            continue
-            
-        vm_number = extract_vm_number(vm.machine_name)
-        if vm_number == 0:
-            continue
-        
-        # Format as VM_01, VM_02, etc.
-        formatted_name = f"VM_{str(vm_number).zfill(2)}"
-        
-        # Determine status
-        vm_status = "active" if vm.case_status == "SUCCESS" else "pending"
-        
-        # Store bot_id for this VM
-        vm_bot_mapping[formatted_name] = vm.bot_id or "Unknown Bot"
-        
-        # If VM already exists, prioritize 'pending' over 'active'
-        if formatted_name in vm_status_dict:
-            if vm_status == "pending":
-                vm_status_dict[formatted_name] = vm_status
-                vm_bot_mapping[formatted_name] = vm.bot_id or "Unknown Bot"
-        else:
-            vm_status_dict[formatted_name] = vm_status
-    
-    # If specific status requested, filter
-    if status and status.lower() in status_mapping:
-        requested_status = status.lower()
-        vm_status_dict = {
-            vm: st for vm, st in vm_status_dict.items() 
-            if st == requested_status
-        }
-    
-    # Convert to list format with bot_id included
-    machines_with_status = [
-        {
-            "machine_name": vm, 
-            "status": st,
-            "bot_id": vm_bot_mapping.get(vm, "Unknown Bot")
-        }
-        for vm, st in sorted(vm_status_dict.items())
-    ]
-    
-    # Count active and pending
-    active_count = sum(1 for m in machines_with_status if m["status"] == "active")
-    pending_count = sum(1 for m in machines_with_status if m["status"] == "pending")
-    
+    latest_vms = get_latest_vms(db)
+    vm_status_dict, vm_bot_mapping = process_vm_records(latest_vms)
+    filtered_vms = filter_by_status(vm_status_dict, status)
+    return build_response(filtered_vms, vm_bot_mapping, status)
+
+
+def get_today_records(db: Session):
+    """Get all records from today only"""
+    all_records = db.query(VMMachine).all()
+    return [r for r in all_records if is_today(r.created_date)]
+
+
+def count_by_status(records):
+    """Count records by process status"""
     return {
-        "status": status.lower() if status else "all",
-        "total_count": len(machines_with_status),
-        "active_count": active_count,
-        "pending_count": pending_count,
-        "machines": machines_with_status
+        'total': len(records),
+        'completed': sum(1 for r in records if r.process_status == 'COMPLETED'),
+        'failed': sum(1 for r in records if r.process_status == 'FAILED'),
+        'in_queue': sum(1 for r in records if r.process_status == 'IN_QUEUE'),
+        'in_progress': sum(1 for r in records if r.process_status == 'IN_PROGRESS')
     }
+
+
+def extract_valid_times(records):
+    """Extract valid time values from completed records"""
+    completed_with_time = [
+        r for r in records
+        if r.process_status == 'COMPLETED' and r.time_taken
+    ]
+
+    valid_times = []
+    for record in completed_with_time:
+        try:
+            time_val = float(record.time_taken)
+            # Only include positive, reasonable values (1 second to 100000 seconds)
+            if 1 <= time_val <= 100000:
+                valid_times.append(time_val)
+        except (ValueError, TypeError):
+            continue
+
+    return valid_times
+
+
+def calculate_avg_execution_time(records):
+    """Calculate average execution time in minutes from records"""
+    try:
+        valid_times = extract_valid_times(records)
+
+        if valid_times:
+            avg_time_seconds = sum(valid_times) / len(valid_times)
+            # Convert seconds to minutes and round to 1 decimal place
+            return round(avg_time_seconds / 60, 1)
+        return 0.0
+    except Exception as e:
+        print(f"Error calculating average time: {e}")
+        return 0.0
 
 
 @app.get("/process-statistics/")
@@ -162,61 +225,18 @@ def get_process_statistics(db: Session = Depends(get_db)):
     Get statistics for TODAY ONLY - cumulative for the current day
     Resets at midnight automatically
     """
-    # Get all records from database
-    all_records = db.query(VMMachine).all()
-    
-    # Filter only today's records
-    today_records = [r for r in all_records if is_today(r.created_date)]
-    
-    # Count by status for today only
-    total = len(today_records)
-    
-    completed_count = sum(1 for r in today_records if r.process_status == 'COMPLETED')
-    failed_count = sum(1 for r in today_records if r.process_status == 'FAILED')
-    in_queue_count = sum(1 for r in today_records if r.process_status == 'IN_QUEUE')
-    in_progress_count = sum(1 for r in today_records if r.process_status == 'IN_PROGRESS')
-    
-    # Calculate average execution time from time_taken column (today's records only)
-    # time_taken is in SECONDS - convert to MINUTES for display
-    completed_with_time = [
-        r for r in today_records
-        if r.process_status == 'COMPLETED' and r.time_taken
-    ]
+    today_records = get_today_records(db)
+    status_counts = count_by_status(today_records)
+    avg_exec_mins = calculate_avg_execution_time(today_records)
 
-    if completed_with_time:
-        try:
-            # Filter out invalid values and convert to float
-            valid_times = []
-            for r in completed_with_time:
-                try:
-                    time_val = float(r.time_taken)
-                    # Only include positive, reasonable values (1 second to 100000 seconds)
-                    if 1 <= time_val <= 100000:
-                        valid_times.append(time_val)
-                except (ValueError, TypeError):
-                    continue
-
-            if valid_times:
-                # Calculate average in seconds
-                avg_time_seconds = sum(valid_times) / len(valid_times)
-                # Convert seconds to minutes and round to 1 decimal place
-                avg_exec_mins = round(avg_time_seconds / 60, 1)
-            else:
-                avg_exec_mins = 0.0
-        except Exception as e:
-            print(f"Error calculating average time: {e}")
-            avg_exec_mins = 0.0
-    else:
-        avg_exec_mins = 0.0
-    
     return {
-        "total_processes": total,
-        "completed": completed_count,
-        "failed": failed_count,
-        "in_queue": in_queue_count,
-        "in_progress": in_progress_count,
+        "total_processes": status_counts['total'],
+        "completed": status_counts['completed'],
+        "failed": status_counts['failed'],
+        "in_queue": status_counts['in_queue'],
+        "in_progress": status_counts['in_progress'],
         "avg_exec_time_mins": avg_exec_mins,
-        "date": str(date.today())  # Include current date in response
+        "date": str(date.today())
     }
 
 @app.get("/bots")

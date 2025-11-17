@@ -350,7 +350,7 @@
         }
 
         // Start when page loads
-        window.addEventListener('DOMContentLoaded', initDashboard);
+        globalThis.addEventListener('DOMContentLoaded', initDashboard);
 
         // Check for new day and reset at midnight
         setInterval(() => {
