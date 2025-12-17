@@ -42,28 +42,7 @@ router = APIRouter(
     - `inProgress`: Number of cases currently in progress (ProcessStatus = 'NEW')
     - `totalInQueue`: Total number of cases waiting in queue
     - `avgTime`: Average processing time in minutes for successful cases
-    """,
-    responses={
-        200: {
-            "description": "Successfully retrieved metrics",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "success": True,
-                        "timestamp": "2025-12-12T10:30:00Z",
-                        "data": {
-                            "errors": 5,
-                            "exceptions": 2,
-                            "successful": 150,
-                            "inProgress": 10,
-                            "totalInQueue": 10,
-                            "avgTime": 45
-                        }
-                    }
-                }
-            }
-        }
-    }
+    """
 )
 async def get_kpi_metrics():
     """
@@ -115,34 +94,7 @@ async def get_kpi_metrics():
     "/metrics/health",
     status_code=status.HTTP_200_OK,
     summary="Health Check for Metrics API",
-    description="Check if the metrics API is operational and can connect to the database",
-    responses={
-        200: {
-            "description": "Service is healthy",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "status": "healthy",
-                        "timestamp": "2025-12-12T10:30:00Z",
-                        "service": "metrics-api"
-                    }
-                }
-            }
-        },
-        503: {
-            "description": "Service is unhealthy",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "status": "unhealthy",
-                        "timestamp": "2025-12-12T10:30:00Z",
-                        "service": "metrics-api",
-                        "error": "Database connection failed"
-                    }
-                }
-            }
-        }
-    }
+    description="Check if the metrics API is operational and can connect to the database"
 )
 async def health_check():
     """
@@ -184,24 +136,7 @@ async def health_check():
 
     This endpoint maintains backward compatibility with existing clients
     that expect the simple JSON object format.
-    """,
-    responses={
-        200: {
-            "description": "Raw metrics data",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "errors": 5,
-                        "exceptions": 2,
-                        "successful": 150,
-                        "inProgress": 10,
-                        "totalInQueue": 10,
-                        "avgTime": 45
-                    }
-                }
-            }
-        }
-    }
+    """
 )
 async def get_raw_metrics():
     """

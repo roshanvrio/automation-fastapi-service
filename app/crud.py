@@ -69,28 +69,20 @@ def get_metrics():
 
 
 def get_queue_prioritization():
-    """Get queue prioritization data sorted by transaction count (descending)"""
+    """Get queue prioritization data with inQueueCount (NEW) and totalCount (all statuses)"""
     db = SessionLocal()
     try:
         result = db.execute(
             text("""
                 SELECT
                     [ProcessName],
-                    CASE
-                        WHEN [EmailFrom] IS NOT NULL THEN 'Email'
-                        ELSE 'No Email'
-                    END AS TriggerIndication,
-                    COUNT([ProcessTransactionId]) AS TransactionCount
+                    MAX(CASE WHEN [EmailFrom] IS NOT NULL THEN 'Email' ELSE 'No Email' END) AS TriggerIndication,
+                    COUNT(CASE WHEN UPPER([ProcessStatus]) = 'NEW' THEN 1 END) AS InQueueCount,
+                    COUNT(*) AS TotalCount
                 FROM [dbo].[excel_data]
-                WHERE [ProcessStatus] = 'New'
-                    AND [CreatedDate] <= GETDATE()
-                GROUP BY
-                    [ProcessName],
-                    CASE
-                        WHEN [EmailFrom] IS NOT NULL THEN 'Email'
-                        ELSE 'No Email'
-                    END
-                ORDER BY COUNT([ProcessTransactionId]) DESC
+                GROUP BY [ProcessName]
+                HAVING COUNT(CASE WHEN UPPER([ProcessStatus]) = 'NEW' THEN 1 END) > 0
+                ORDER BY COUNT(CASE WHEN UPPER([ProcessStatus]) = 'NEW' THEN 1 END) DESC
             """)
         ).fetchall()
 
@@ -98,7 +90,8 @@ def get_queue_prioritization():
             {
                 "processName": row[0],
                 "triggerIndication": row[1],
-                "transactionCount": row[2]
+                "inQueueCount": row[2],
+                "totalCount": row[3]
             }
             for row in result
         ]
