@@ -130,28 +130,3 @@ def get_active_vms():
         db.close()
 
 
-def get_idle_vms():
-    """Get distinct machine names that are NOT currently in progress (for Entry/Exit pool)"""
-    db = SessionLocal()
-    try:
-        result = db.execute(
-            text("""
-                SELECT DISTINCT [MachineName]
-                FROM [dbo].[excel_data]
-                WHERE [MachineName] IS NOT NULL
-                AND [MachineName] NOT IN (
-                    SELECT DISTINCT [MachineName]
-                    FROM [dbo].[excel_data]
-                    WHERE [CaseStatus] = 'InProgress'
-                    AND [MachineName] IS NOT NULL
-                )
-                ORDER BY [MachineName]
-            """)
-        ).fetchall()
-
-        return [row[0] for row in result]
-    except Exception as e:
-        print(f"Error in get_idle_vms: {str(e)}")
-        return []
-    finally:
-        db.close()

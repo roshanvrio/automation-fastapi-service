@@ -1,7 +1,7 @@
 # app/main.py
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from app.crud import get_metrics, get_queue_prioritization, get_active_vms, get_idle_vms
+from app.crud import get_metrics, get_queue_prioritization, get_active_vms
 import asyncio
 import json
 from typing import List
@@ -124,25 +124,9 @@ async def websocket_dashboard(websocket: WebSocket):
                     "message": str(e)
                 })
 
-            # Event 4: Idle VMs update (for Entry/Exit pool - VMs NOT in progress)
-            try:
-                idle_vms_data = get_idle_vms()
-                await websocket.send_json({
-                    "type": "idle_vms_update",
-                    "data": idle_vms_data,
-                    "timestamp": timestamp
-                })
-            except Exception as e:
-                print(f"Error fetching idle VMs: {e}")
-                await websocket.send_json({
-                    "type": "error",
-                    "source": "idle_vms",
-                    "message": str(e)
-                })
 
-            # Add more events here for future sections:
-            # Event 4: await websocket.send_json({"type": "bot_status_update", ...})
-            # Event 5: await websocket.send_json({"type": "alerts_update", ...})
+
+
 
             # Wait 10 seconds before next update cycle
             await asyncio.sleep(10)
