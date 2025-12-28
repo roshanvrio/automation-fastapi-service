@@ -143,6 +143,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+myenv/
 
 # Spyder project settings
 .spyderproject
@@ -205,3 +206,26 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# IDE
+.vscode/
+.idea/
+
+# Database files
+*.xlsx
+*.xls
+
+# Temporary files
+*.log
+*.sql
+
+# OS files
+.DS_Store
+Thumbs.db
