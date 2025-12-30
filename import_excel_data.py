@@ -36,6 +36,6 @@ def import_excel_data(excel_path: str):
 
 if __name__ == "__main__":
     # Excel file path
-    excel_file = "Sample_db(updated).xlsx"
+    excel_file = "Sample_DB.xlsx"
     
     import_excel_data(excel_file)

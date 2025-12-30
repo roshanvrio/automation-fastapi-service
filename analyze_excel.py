@@ -1,7 +1,7 @@
 import pandas as pd
 
 # Path to Excel file
-excel_file = "Sample_db(updated).xlsx"
+excel_file = "Sample_DB.xlsx"
 
 # Read Excel file
 excel_data = pd.ExcelFile(excel_file)

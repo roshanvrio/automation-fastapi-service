@@ -1,31 +1,41 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import case, func
 from app.models.models import ProcessTransaction, VMPool
-from datetime import datetime, date
+from datetime import datetime
 
 def get_metrics(db: Session) -> dict:
     try:
-        today = date.today()
+        # NOTE: CreatedDate column is TIME type, not DATETIME
+        # Cannot filter by date until schema is fixed
+        # Showing all records regardless of date
 
-        exceptions = db.query(ProcessTransaction).filter(ProcessTransaction.CaseStatus == "EXCEPTION", func.date(ProcessTransaction.CreatedDate) == today).count()
+        exceptions = db.query(ProcessTransaction).filter(ProcessTransaction.CaseStatus == "EXCEPTION").count()
 
-        successful = db.query(ProcessTransaction).filter(ProcessTransaction.CaseStatus == "SUCCESS", func.date(ProcessTransaction.CreatedDate) == today).count()
+        successful = db.query(ProcessTransaction).filter(ProcessTransaction.CaseStatus == "SUCCESS").count()
 
-        total_in_queue = db.query(ProcessTransaction).filter(ProcessTransaction.ProcessStatus == "NEW", func.date(ProcessTransaction.CreatedDate) == today).count()
+        total_in_queue = db.query(ProcessTransaction).filter(ProcessTransaction.ProcessStatus == "NEW").count()
 
-        errors = db.query(ProcessTransaction).filter(ProcessTransaction.CaseStatus == "ERROR", func.date(ProcessTransaction.CreatedDate) == today).count()
+        errors = db.query(ProcessTransaction).filter(ProcessTransaction.CaseStatus == "ERROR").count()
 
         #avg time(Only completed Transactions)
-        completed_transactions = db.query(ProcessTransaction.StartTime, ProcessTransaction.EndTime).filter(ProcessTransaction.EndTime.isnot(None), func.date(ProcessTransaction.CreatedDate) == today).all()
+        completed_transactions = db.query(ProcessTransaction.StartTime, ProcessTransaction.EndTime).filter(ProcessTransaction.EndTime.isnot(None), ProcessTransaction.StartTime.isnot(None)).all()
 
         if completed_transactions:
             total_minutes = 0
             for trans in completed_transactions:
-                time_diff = trans.EndTime - trans.StartTime
-                minutes = time_diff.total_seconds() / 60
+                # Both StartTime and EndTime are TIME type, calculate difference
+                start_seconds = trans.StartTime.hour * 3600 + trans.StartTime.minute * 60 + trans.StartTime.second
+                end_seconds = trans.EndTime.hour * 3600 + trans.EndTime.minute * 60 + trans.EndTime.second
+
+                if end_seconds >= start_seconds:
+                    minutes = (end_seconds - start_seconds) / 60
+                else:
+                    # Crossed midnight
+                    minutes = ((86400 - start_seconds) + end_seconds) / 60
+
                 total_minutes += minutes
 
-            avg_time = int(total_minutes/len(completed_transactions))    
+            avg_time = int(total_minutes/len(completed_transactions))
         else:
             avg_time = 0
         
@@ -48,8 +58,7 @@ def get_metrics(db: Session) -> dict:
     
 def get_queue_priority(db: Session):
     try:
-        today = date.today()
-
+        # NOTE: CreatedDate is TIME type, not DATETIME - cannot filter by date
         results = db.query(
             ProcessTransaction.ProcessName.label("processName"),
 
@@ -70,7 +79,7 @@ def get_queue_priority(db: Session):
             func.count(ProcessTransaction.ProcessTransactionId).label("totalCount"),
 
             func.max(ProcessTransaction.RPATool).label("rpaTool")
-        ).filter(func.date(ProcessTransaction.CreatedDate) == today).group_by(ProcessTransaction.ProcessName).all()
+        ).group_by(ProcessTransaction.ProcessName).all()
 
         return [
             {
@@ -90,15 +99,13 @@ def get_queue_priority(db: Session):
     
 
 def get_active_vms(db: Session) -> list:
-    
+
     try:
-        today = date.today()
-        
+        # NOTE: CreatedDate is TIME type, not DATETIME - cannot filter by date
         # Get all ongoing transactions (Active VMs)
         ongoing_transactions = db.query(ProcessTransaction).filter(
             ProcessTransaction.ProcessStatus == "ONGOING",
-            ProcessTransaction.MachineName.isnot(None),
-            func.date(ProcessTransaction.CreatedDate) == today
+            ProcessTransaction.MachineName.isnot(None)
         ).all()
         
         active_vms = []
@@ -117,16 +124,23 @@ def get_active_vms(db: Session) -> list:
             completed_count = db.query(ProcessTransaction).filter(
                 ProcessTransaction.MachineName == machine_name,
                 ProcessTransaction.ProcessName == process_name,
-                ProcessTransaction.ProcessStatus == "COMPLETED",
-                func.date(ProcessTransaction.CreatedDate) == today
+                ProcessTransaction.ProcessStatus == "COMPLETED"
             ).count()
-            
+
             # 3. Last Run Time (Current Time - Start Time)
             if trans.StartTime:
                 current_time = datetime.now()
-                time_diff = current_time - trans.StartTime
-                total_minutes = time_diff.total_seconds() / 60
-                
+                # StartTime is TIME type, need to calculate difference from current time
+                # Convert time to comparable format
+                start_seconds = trans.StartTime.hour * 3600 + trans.StartTime.minute * 60 + trans.StartTime.second
+                current_seconds = current_time.hour * 3600 + current_time.minute * 60 + current_time.second
+
+                if current_seconds >= start_seconds:
+                    total_minutes = (current_seconds - start_seconds) / 60
+                else:
+                    # Crossed midnight
+                    total_minutes = ((86400 - start_seconds) + current_seconds) / 60
+
                 # Format as hours if >= 60 minutes, otherwise minutes
                 if total_minutes >= 60:
                     hours = total_minutes / 60
@@ -135,26 +149,24 @@ def get_active_vms(db: Session) -> list:
                     last_run_time = f"{int(total_minutes)} mins"
             else:
                 last_run_time = "0 mins"
-            
+
             # 4. RPA Tool
             rpa_tool = trans.RPATool
-            
+
             # 5. Successful Count (Green dots)
             successful_count = db.query(ProcessTransaction).filter(
                 ProcessTransaction.MachineName == machine_name,
                 ProcessTransaction.ProcessName == process_name,
                 ProcessTransaction.ProcessStatus == "COMPLETED",
-                ProcessTransaction.CaseStatus == "SUCCESS",
-                func.date(ProcessTransaction.CreatedDate) == today
+                ProcessTransaction.CaseStatus == "SUCCESS"
             ).count()
-            
+
             # 6. Failed Count (Red dots) - Error + Exception
             failed_count = db.query(ProcessTransaction).filter(
                 ProcessTransaction.MachineName == machine_name,
                 ProcessTransaction.ProcessName == process_name,
                 ProcessTransaction.ProcessStatus == "FAILED",
-                ProcessTransaction.CaseStatus.in_(["ERROR", "EXCEPTION"]),
-                func.date(ProcessTransaction.CreatedDate) == today
+                ProcessTransaction.CaseStatus.in_(["ERROR", "EXCEPTION"])
             ).count()
             
             # Build VM data
@@ -176,29 +188,27 @@ def get_active_vms(db: Session) -> list:
         return []
     
 def get_idle_vms(db: Session) -> list:
-    
+
     try:
-        today = date.today()
-        
+        # NOTE: CreatedDate is TIME type, not DATETIME - cannot filter by date
         # Step 1: Get all VMs from vm_pool table
         all_vms_rows = db.query(VMPool).all()
-        
+
         all_vms = set()  # Use set to avoid duplicates
-        
+
         for row in all_vms_rows:
             # Add Automation Anywhere VMs (if not NULL)
             if row.automation_anywhere_vms:
                 all_vms.add(row.automation_anywhere_vms)
-            
+
             # Add UiPath VMs (if not NULL)
             if row.uipath_vms:
                 all_vms.add(row.uipath_vms)
-        
-        # Step 2: Get all active VMs (ONGOING transactions, current date)
+
+        # Step 2: Get all active VMs (ONGOING transactions)
         active_transactions = db.query(ProcessTransaction.MachineName).filter(
             ProcessTransaction.ProcessStatus == "ONGOING",
-            ProcessTransaction.MachineName.isnot(None),
-            func.date(ProcessTransaction.CreatedDate) == today
+            ProcessTransaction.MachineName.isnot(None)
         ).all()
         
         # Step 3: Extract base VM names (remove .BOT suffix)
@@ -229,7 +239,7 @@ def get_idle_vms(db: Session) -> list:
 def get_vm_utilization(db: Session) -> dict:
 
     try:
-        today = date.today()
+        # NOTE: CreatedDate is TIME type, not DATETIME - cannot filter by date
         current_time = datetime.now()
 
         all_vm_rows = db.query(VMPool).all()
@@ -248,8 +258,7 @@ def get_vm_utilization(db: Session) -> dict:
 
              completed_count = db.query(ProcessTransaction).filter(
                  ProcessTransaction.MachineName == machine_name_with_bot,
-                 ProcessTransaction.ProcessStatus == "COMPLETED",
-                 func.date(ProcessTransaction.CreatedDate) == today
+                 ProcessTransaction.ProcessStatus == "COMPLETED"
              ).count()
 
              total_hours = 0.0
@@ -258,25 +267,39 @@ def get_vm_utilization(db: Session) -> dict:
                  ProcessTransaction.MachineName == machine_name_with_bot,
                  ProcessTransaction.ProcessStatus == "COMPLETED",
                  ProcessTransaction.StartTime.isnot(None),
-                 ProcessTransaction.EndTime.isnot(None),
-                 func.date(ProcessTransaction.CreatedDate) == today
+                 ProcessTransaction.EndTime.isnot(None)
              ).all()
 
              for trans in completed_transactions:
-                 time_diff = trans.EndTime - trans.StartTime
-                 hours = time_diff.total_seconds() / 3600
+                 # Both StartTime and EndTime are TIME type, calculate difference
+                 start_seconds = trans.StartTime.hour * 3600 + trans.StartTime.minute * 60 + trans.StartTime.second
+                 end_seconds = trans.EndTime.hour * 3600 + trans.EndTime.minute * 60 + trans.EndTime.second
+
+                 if end_seconds >= start_seconds:
+                     hours = (end_seconds - start_seconds) / 3600
+                 else:
+                     # Crossed midnight
+                     hours = ((86400 - start_seconds) + end_seconds) / 3600
+
                  total_hours += hours
-             
+
              active_transaction = db.query(ProcessTransaction.StartTime).filter(
                  ProcessTransaction.MachineName == machine_name_with_bot,
                  ProcessTransaction.ProcessStatus == "ONGOING",
-                 ProcessTransaction.StartTime.isnot(None),
-                 func.date(ProcessTransaction.CreatedDate) == today
+                 ProcessTransaction.StartTime.isnot(None)
              ).first()
 
              if active_transaction:
-                 time_diff = current_time - active_transaction.StartTime
-                 hours = time_diff.total_seconds() / 3600
+                 # Calculate time difference from start time to now
+                 start_seconds = active_transaction.StartTime.hour * 3600 + active_transaction.StartTime.minute * 60 + active_transaction.StartTime.second
+                 current_seconds = current_time.hour * 3600 + current_time.minute * 60 + current_time.second
+
+                 if current_seconds >= start_seconds:
+                     hours = (current_seconds - start_seconds) / 3600
+                 else:
+                     # Crossed midnight
+                     hours = ((86400 - start_seconds) + current_seconds) / 3600
+
                  total_hours += hours
 
              total_hours = round(total_hours, 1)

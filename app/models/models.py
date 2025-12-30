@@ -7,43 +7,44 @@ class ProcessTransaction(Base):
     __table_args__ = (
         PrimaryKeyConstraint('ProcessTransactionId', 'StartTime', name='pk_process_transaction'),
     )
-    
-    
+
+
     # Integer fields
     MappingId = Column(Integer, nullable=False)
     ProcessTransactionId = Column(Integer, nullable=False)
-    TimeTaken = Column(Integer, nullable=False)
-    TAT = Column(Integer, nullable=False)
-    
+    TimeTaken = Column(Integer, nullable=True)
+    TAT = Column(Integer, nullable=True)
+
     # String fields
-    Country = Column(String(100), nullable=False)
-    TowerName = Column(String(100), nullable=False)
-    RPATool = Column(String(100), nullable=False)
-    ProcessName = Column(String(200), nullable=False)
-    OGName = Column(String(100), nullable=False)
-    TransactionNo = Column(String(200), nullable=False)
-    ProcessStatus = Column(String(100), nullable=False)
-    CaseStatus = Column(String(100), nullable=False)
-    CaseReason = Column(String(500), nullable=False)
-    ProcessOwner = Column(String(200), nullable=False)
+    Region = Column(String(100), nullable=True)
+    TowerName = Column(String(100), nullable=True)
+    RPATool = Column(String(100), nullable=True)
+    ProcessName = Column(String(200), nullable=True)
+    SubProcessName = Column(String(200), nullable=True)
+    OGName = Column(String(100), nullable=True)
+    TransactionNo = Column(String(200), nullable=True)
+    ProcessStatus = Column(String(100), nullable=True)
+    CaseStatus = Column(String(100), nullable=True)
+    CaseReason = Column(String(500), nullable=True)
+    ProcessOwner = Column(String(200), nullable=True)
     MachineName = Column(String(200), nullable=True)
-    
+
     # DateTime fields
     StartTime = Column(DateTime, nullable=True)
     EndTime = Column(DateTime, nullable=True)
     CreatedDate = Column(DateTime, nullable=True)
-    
+
     # Boolean field
-    isChild = Column(Boolean, nullable=False, default=False)
-    
+    isChild = Column(Boolean, nullable=True, default=False)
+
     # Nullable fields
-    EmailFrom = Column(String(50), nullable=True)
-    EmailSubject = Column(String(200), nullable=True)
+    EmailFrom = Column(String(200), nullable=True)
+    EmailSubject = Column(String(500), nullable=True)
     BotID = Column(String(100), nullable=True)
     EmailReceivedTime = Column(DateTime, nullable=True)
 
     def __repr__(self):
-        return f"<ProcessTransaction(id={self.id}, ProcessTransactionId={self.ProcessTransactionId}, ProcessName={self.ProcessName})>"
+        return f"<ProcessTransaction(ProcessTransactionId={self.ProcessTransactionId}, ProcessName={self.ProcessName})>"
 
 
 class VMPool(Base):
