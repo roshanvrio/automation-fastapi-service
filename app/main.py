@@ -36,7 +36,7 @@ async def websocket_dashboard(websocket: WebSocket):
                     "data": metrics_data
                 })
 
-                print(f"Sent metrics data: {metrics_data}")
+                #print(f"Sent metrics data: {metrics_data}")
 
                 queue_data = get_queue_priority(db)
                 await websocket.send_json({
@@ -44,7 +44,7 @@ async def websocket_dashboard(websocket: WebSocket):
                     "data": queue_data
                 })
 
-                print(f"Sent queue priority data: {queue_data}")
+                #print(f"Sent queue priority data: {queue_data}")
 
                 active_vms_data = get_active_vms(db)
                 await websocket.send_json({
@@ -52,7 +52,7 @@ async def websocket_dashboard(websocket: WebSocket):
                     "data": active_vms_data
                 })
 
-                print(f"Sent active VMs data: {active_vms_data}")
+                #print(f"Sent active VMs data: {active_vms_data}")
 
                 idle_vms_data = get_idle_vms(db)
                 await websocket.send_json({
@@ -60,7 +60,7 @@ async def websocket_dashboard(websocket: WebSocket):
                     "data": idle_vms_data
                 })
 
-                print(f"Sent idle VMs data: {idle_vms_data}")
+                #print(f"Sent idle VMs data: {idle_vms_data}")
 
                 vm_utilization_data = get_vm_utilization(db)
                 await websocket.send_json({
@@ -79,7 +79,7 @@ async def websocket_dashboard(websocket: WebSocket):
             finally:
                 db.close()
 
-            await asyncio.sleep(2)
+            await asyncio.sleep(10)
         
     except WebSocketDisconnect:
         print("WebSocket Disconnected")

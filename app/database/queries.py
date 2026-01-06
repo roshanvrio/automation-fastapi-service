@@ -1,85 +1,58 @@
 from sqlalchemy.orm import Session
-from sqlalchemy import case, func
-from app.models.models import ProcessTransaction, VMPool
-from datetime import datetime
+from sqlalchemy import text
 
 def get_metrics(db: Session) -> dict:
     try:
-        # NOTE: CreatedDate column is TIME type, not DATETIME
-        # Cannot filter by date until schema is fixed
-        # Showing all records regardless of date
+        query = text("""
+            SELECT
+                SUM(CASE WHEN CaseStatus = 'EXCEPTION' THEN 1 ELSE 0 END) as exceptions,
+                SUM(CASE WHEN CaseStatus = 'SUCCESS' THEN 1 ELSE 0 END) as successful,
+                SUM(CASE WHEN ProcessStatus = 'NEW' THEN 1 ELSE 0 END) as total_in_queue,
+                SUM(CASE WHEN CaseStatus = 'ERROR' THEN 1 ELSE 0 END) as errors,
+                CAST(AVG(DATEDIFF(SECOND, StartTime, EndTime) / 60.0) AS INT) as avg_time
+            FROM process_transactions
+            WHERE StartTime IS NOT NULL AND EndTime IS NOT NULL
+        """)
 
-        exceptions = db.query(ProcessTransaction).filter(ProcessTransaction.CaseStatus == "EXCEPTION").count()
+        result = db.execute(query).fetchone()
 
-        successful = db.query(ProcessTransaction).filter(ProcessTransaction.CaseStatus == "SUCCESS").count()
-
-        total_in_queue = db.query(ProcessTransaction).filter(ProcessTransaction.ProcessStatus == "NEW").count()
-
-        errors = db.query(ProcessTransaction).filter(ProcessTransaction.CaseStatus == "ERROR").count()
-
-        #avg time(Only completed Transactions)
-        completed_transactions = db.query(ProcessTransaction.StartTime, ProcessTransaction.EndTime).filter(ProcessTransaction.EndTime.isnot(None), ProcessTransaction.StartTime.isnot(None)).all()
-
-        if completed_transactions:
-            total_minutes = 0
-            for trans in completed_transactions:
-                # Both StartTime and EndTime are TIME type, calculate difference
-                start_seconds = trans.StartTime.hour * 3600 + trans.StartTime.minute * 60 + trans.StartTime.second
-                end_seconds = trans.EndTime.hour * 3600 + trans.EndTime.minute * 60 + trans.EndTime.second
-
-                if end_seconds >= start_seconds:
-                    minutes = (end_seconds - start_seconds) / 60
-                else:
-                    # Crossed midnight
-                    minutes = ((86400 - start_seconds) + end_seconds) / 60
-
-                total_minutes += minutes
-
-            avg_time = int(total_minutes/len(completed_transactions))
-        else:
-            avg_time = 0
-        
         return {
-            "exceptions" : exceptions,
-            "successful" : successful,
-            "totalInQueue" : total_in_queue,
-            "errors" : errors,
-            "avgTime" : avg_time
+            "exceptions": result.exceptions or 0,
+            "successful": result.successful or 0,
+            "totalInQueue": result.total_in_queue or 0,
+            "errors": result.errors or 0,
+            "avgTime": result.avg_time or 0
         }
     except Exception as e:
         print(f"Error in get_metrics: {e}")
         return {
-            "exceptions" : 0,
-            "successful" : 0,
-            "totalInQueue" : 0,
-            "errors" : 0,
-            "avgTime" : 0
+            "exceptions": 0,
+            "successful": 0,
+            "totalInQueue": 0,
+            "errors": 0,
+            "avgTime": 0
         }
     
 def get_queue_priority(db: Session):
     try:
-        # NOTE: CreatedDate is TIME type, not DATETIME - cannot filter by date
-        results = db.query(
-            ProcessTransaction.ProcessName.label("processName"),
+        query = text("""
+            SELECT
+                ProcessName as processName,
+                CASE
+                    WHEN MAX(CASE WHEN EmailFrom IS NOT NULL THEN 1 ELSE 0 END) = 1
+                    THEN 'Email'
+                    ELSE 'Schedule'
+                END as triggerIndication,
+                SUM(CASE WHEN ProcessStatus = 'NEW' THEN 1 ELSE 0 END) as inQueueCount,
+                COUNT(ProcessTransactionId) as totalCount,
+                MAX(RPATool) as rpaTool
+            FROM process_transactions
+            GROUP BY ProcessName
+            HAVING SUM(CASE WHEN ProcessStatus = 'NEW' THEN 1 ELSE 0 END) > 0
+            ORDER BY inQueueCount DESC
+        """)
 
-            func.max(
-                case(
-                    (ProcessTransaction.EmailFrom != None, "Email"),
-                    else_="Schedule"
-                )
-            ).label("triggerIndication"),
-
-            func.sum(
-                case(
-                    (ProcessTransaction.ProcessStatus == "NEW", 1),
-                    else_=0
-                )
-            ).label("inQueueCount"),
-
-            func.count(ProcessTransaction.ProcessTransactionId).label("totalCount"),
-
-            func.max(ProcessTransaction.RPATool).label("rpaTool")
-        ).group_by(ProcessTransaction.ProcessName).all()
+        results = db.execute(query).fetchall()
 
         return [
             {
@@ -90,246 +63,223 @@ def get_queue_priority(db: Session):
                 "rpaTool": row.rpaTool
             }
             for row in results
-            if row.inQueueCount > 0
         ]
-    
+
     except Exception as e:
         print(f"Error in get_queue_priority: {e}")
         return []
     
 
 def get_active_vms(db: Session) -> list:
-
     try:
-        # NOTE: CreatedDate is TIME type, not DATETIME - cannot filter by date
-        # Get all ongoing transactions (Active VMs)
-        ongoing_transactions = db.query(ProcessTransaction).filter(
-            ProcessTransaction.ProcessStatus == "ONGOING",
-            ProcessTransaction.MachineName.isnot(None)
-        ).all()
-        
+        query = text("""
+            WITH ongoing_vms AS (
+                SELECT
+                    ProcessTransactionId,
+                    MachineName,
+                    ProcessName,
+                    StartTime,
+                    EmailFrom,
+                    RPATool
+                FROM process_transactions
+                WHERE ProcessStatus = 'ONGOING'
+                  AND MachineName IS NOT NULL
+            ),
+            aggregated_stats AS (
+                SELECT
+                    MachineName,
+                    ProcessName,
+                    SUM(CASE WHEN ProcessStatus = 'COMPLETED' THEN 1 ELSE 0 END) as completed_count,
+                    SUM(CASE
+                        WHEN ProcessStatus = 'COMPLETED'
+                         AND CaseStatus = 'SUCCESS'
+                        THEN 1 ELSE 0
+                    END) as successful_count,
+                    SUM(CASE
+                        WHEN ProcessStatus = 'FAILED'
+                         AND CaseStatus IN ('ERROR', 'EXCEPTION')
+                        THEN 1 ELSE 0
+                    END) as failed_count
+                FROM process_transactions
+                GROUP BY MachineName, ProcessName
+            )
+            SELECT
+                o.MachineName as machineName,
+                o.ProcessName as processName,
+                CASE
+                    WHEN o.EmailFrom IS NOT NULL THEN 'Email'
+                    ELSE 'Scheduled'
+                END as triggerIndication,
+                COALESCE(s.completed_count, 0) as completedTransactions,
+                CAST(DATEDIFF(SECOND, o.StartTime, GETDATE()) / 60 AS INT) as runTimeMinutes,
+                o.RPATool as rpaTool,
+                COALESCE(s.successful_count, 0) as successfulCount,
+                COALESCE(s.failed_count, 0) as failedCount
+            FROM ongoing_vms o
+            LEFT JOIN aggregated_stats s
+                ON o.MachineName = s.MachineName
+               AND o.ProcessName = s.ProcessName
+        """)
+
+        results = db.execute(query).fetchall()
+
         active_vms = []
-        
-        for trans in ongoing_transactions:
-            machine_name = trans.MachineName
-            process_name = trans.ProcessName
-            
-            # 1. Trigger Indication
-            if trans.StartTime and trans.EmailFrom:
-                trigger_indication = "Email"
+        for row in results:
+            # Format time display
+            total_minutes = row.runTimeMinutes
+            if total_minutes >= 60:
+                hours = total_minutes / 60
+                last_run_time = f"{hours:.1f} Hours"
             else:
-                trigger_indication = "Scheduled"
-            
-            # 2. Completed Transactions for this VM + this Process
-            completed_count = db.query(ProcessTransaction).filter(
-                ProcessTransaction.MachineName == machine_name,
-                ProcessTransaction.ProcessName == process_name,
-                ProcessTransaction.ProcessStatus == "COMPLETED"
-            ).count()
+                last_run_time = f"{int(total_minutes)} mins"
 
-            # 3. Last Run Time (Current Time - Start Time)
-            if trans.StartTime:
-                current_time = datetime.now()
-                # StartTime is TIME type, need to calculate difference from current time
-                # Convert time to comparable format
-                start_seconds = trans.StartTime.hour * 3600 + trans.StartTime.minute * 60 + trans.StartTime.second
-                current_seconds = current_time.hour * 3600 + current_time.minute * 60 + current_time.second
-
-                if current_seconds >= start_seconds:
-                    total_minutes = (current_seconds - start_seconds) / 60
-                else:
-                    # Crossed midnight
-                    total_minutes = ((86400 - start_seconds) + current_seconds) / 60
-
-                # Format as hours if >= 60 minutes, otherwise minutes
-                if total_minutes >= 60:
-                    hours = total_minutes / 60
-                    last_run_time = f"{hours:.1f} Hours"
-                else:
-                    last_run_time = f"{int(total_minutes)} mins"
-            else:
-                last_run_time = "0 mins"
-
-            # 4. RPA Tool
-            rpa_tool = trans.RPATool
-
-            # 5. Successful Count (Green dots)
-            successful_count = db.query(ProcessTransaction).filter(
-                ProcessTransaction.MachineName == machine_name,
-                ProcessTransaction.ProcessName == process_name,
-                ProcessTransaction.ProcessStatus == "COMPLETED",
-                ProcessTransaction.CaseStatus == "SUCCESS"
-            ).count()
-
-            # 6. Failed Count (Red dots) - Error + Exception
-            failed_count = db.query(ProcessTransaction).filter(
-                ProcessTransaction.MachineName == machine_name,
-                ProcessTransaction.ProcessName == process_name,
-                ProcessTransaction.ProcessStatus == "FAILED",
-                ProcessTransaction.CaseStatus.in_(["ERROR", "EXCEPTION"])
-            ).count()
-            
-            # Build VM data
             active_vms.append({
-                "machineName": machine_name,
-                "processName": process_name,
-                "triggerIndication": trigger_indication,
-                "completedTransactions": completed_count,
+                "machineName": row.machineName,
+                "processName": row.processName,
+                "triggerIndication": row.triggerIndication,
+                "completedTransactions": row.completedTransactions,
                 "lastRunTime": last_run_time,
-                "rpaTool": rpa_tool,
-                "successfulCount": successful_count,
-                "failedCount": failed_count
+                "rpaTool": row.rpaTool,
+                "successfulCount": row.successfulCount,
+                "failedCount": row.failedCount
             })
-        
+
         return active_vms
-        
+
     except Exception as e:
         print(f"Error in get_active_vms: {e}")
         return []
     
 def get_idle_vms(db: Session) -> list:
-
     try:
-        # NOTE: CreatedDate is TIME type, not DATETIME - cannot filter by date
-        # Step 1: Get all VMs from vm_pool table
-        all_vms_rows = db.query(VMPool).all()
+        query = text("""
+            WITH all_vms AS (
+                SELECT [Automation Anywhere VMs] as vm_name
+                FROM vm_pool
+                WHERE [Automation Anywhere VMs] IS NOT NULL
 
-        all_vms = set()  # Use set to avoid duplicates
+                UNION
 
-        for row in all_vms_rows:
-            # Add Automation Anywhere VMs (if not NULL)
-            if row.automation_anywhere_vms:
-                all_vms.add(row.automation_anywhere_vms)
+                SELECT [Uipath VMs] as vm_name
+                FROM vm_pool
+                WHERE [Uipath VMs] IS NOT NULL
+            ),
+            active_vms AS (
+                SELECT DISTINCT
+                    CASE
+                        WHEN MachineName LIKE '%.BOT'
+                        THEN LEFT(MachineName, LEN(MachineName) - 4)
+                        ELSE MachineName
+                    END as vm_name
+                FROM process_transactions
+                WHERE ProcessStatus = 'ONGOING'
+                  AND MachineName IS NOT NULL
+            )
+            SELECT vm_name
+            FROM all_vms
+            EXCEPT
+            SELECT vm_name
+            FROM active_vms
+            ORDER BY vm_name
+        """)
 
-            # Add UiPath VMs (if not NULL)
-            if row.uipath_vms:
-                all_vms.add(row.uipath_vms)
+        results = db.execute(query).fetchall()
+        return [row.vm_name for row in results]
 
-        # Step 2: Get all active VMs (ONGOING transactions)
-        active_transactions = db.query(ProcessTransaction.MachineName).filter(
-            ProcessTransaction.ProcessStatus == "ONGOING",
-            ProcessTransaction.MachineName.isnot(None)
-        ).all()
-        
-        # Step 3: Extract base VM names (remove .BOT suffix)
-        active_vms = set()
-        
-        for trans in active_transactions:
-            machine_name = trans.MachineName
-            
-            # Remove .BOT suffix if present
-            # e.g., "VM1.BOT" -> "VM1"
-            if machine_name.endswith(".BOT"):
-                base_name = machine_name.replace(".BOT", "")
-                active_vms.add(base_name)
-            else:
-                # If no .BOT suffix, use as is
-                active_vms.add(machine_name)
-        
-        # Step 4: Calculate idle VMs (all VMs - active VMs)
-        idle_vms = all_vms - active_vms
-        
-        # Return as sorted list
-        return sorted(list(idle_vms))
-        
     except Exception as e:
         print(f"Error in get_idle_vms: {e}")
         return []
     
 def get_vm_utilization(db: Session) -> dict:
-
     try:
-        # NOTE: CreatedDate is TIME type, not DATETIME - cannot filter by date
-        current_time = datetime.now()
+        query = text("""
+            WITH all_vms AS (
+                SELECT [Automation Anywhere VMs] as vm_name
+                FROM vm_pool
+                WHERE [Automation Anywhere VMs] IS NOT NULL
+                UNION
+                SELECT [Uipath VMs] as vm_name
+                FROM vm_pool
+                WHERE [Uipath VMs] IS NOT NULL
+            ),
+            vm_stats AS (
+                SELECT
+                    CASE
+                        WHEN MachineName LIKE '%.BOT'
+                        THEN LEFT(MachineName, LEN(MachineName) - 4)
+                        ELSE MachineName
+                    END as vm_name,
+                    SUM(CASE WHEN ProcessStatus = 'COMPLETED' THEN 1 ELSE 0 END) as completed_count,
+                    SUM(
+                        CASE
+                            WHEN ProcessStatus = 'COMPLETED'
+                             AND StartTime IS NOT NULL
+                             AND EndTime IS NOT NULL
+                            THEN CAST(DATEDIFF(SECOND, StartTime, EndTime) AS FLOAT) / 3600.0
+                            ELSE 0
+                        END
+                    ) as completed_hours,
+                    SUM(
+                        CASE
+                            WHEN ProcessStatus = 'ONGOING'
+                             AND StartTime IS NOT NULL
+                            THEN CAST(DATEDIFF(SECOND, StartTime, GETDATE()) AS FLOAT) / 3600.0
+                            ELSE 0
+                        END
+                    ) as ongoing_hours
+                FROM process_transactions
+                WHERE MachineName IS NOT NULL
+                GROUP BY
+                    CASE
+                        WHEN MachineName LIKE '%.BOT'
+                        THEN LEFT(MachineName, LEN(MachineName) - 4)
+                        ELSE MachineName
+                    END
+            ),
+            vm_utilization AS (
+                SELECT
+                    v.vm_name as vmName,
+                    COALESCE(s.completed_count, 0) as completedTransactions,
+                    ROUND(COALESCE(s.completed_hours, 0) + COALESCE(s.ongoing_hours, 0), 1) as utilizationHours
+                FROM all_vms v
+                LEFT JOIN vm_stats s ON v.vm_name = s.vm_name
+            )
+            SELECT
+                vmName,
+                completedTransactions,
+                utilizationHours,
+                CASE
+                    WHEN utilizationHours = MAX(utilizationHours) OVER () THEN 1
+                    ELSE 0
+                END as is_top_performer
+            FROM vm_utilization
+            ORDER BY utilizationHours DESC
+        """)
 
-        all_vm_rows = db.query(VMPool).all()
-
-        all_vms = set()
-        for row in all_vm_rows:
-            if row.automation_anywhere_vms:
-                all_vms.add(row.automation_anywhere_vms)
-            if row.uipath_vms:
-                all_vms.add(row.uipath_vms)
+        results = db.execute(query).fetchall()
 
         vm_utilization_list = []
+        top_performer_data = {"vmName": "N/A", "utilizationHours": 0.0}
 
-        for vm_name in all_vms:
-             machine_name_with_bot = f"{vm_name}.BOT"
-
-             completed_count = db.query(ProcessTransaction).filter(
-                 ProcessTransaction.MachineName == machine_name_with_bot,
-                 ProcessTransaction.ProcessStatus == "COMPLETED"
-             ).count()
-
-             total_hours = 0.0
-
-             completed_transactions = db.query(ProcessTransaction.StartTime, ProcessTransaction.EndTime).filter(
-                 ProcessTransaction.MachineName == machine_name_with_bot,
-                 ProcessTransaction.ProcessStatus == "COMPLETED",
-                 ProcessTransaction.StartTime.isnot(None),
-                 ProcessTransaction.EndTime.isnot(None)
-             ).all()
-
-             for trans in completed_transactions:
-                 # Both StartTime and EndTime are TIME type, calculate difference
-                 start_seconds = trans.StartTime.hour * 3600 + trans.StartTime.minute * 60 + trans.StartTime.second
-                 end_seconds = trans.EndTime.hour * 3600 + trans.EndTime.minute * 60 + trans.EndTime.second
-
-                 if end_seconds >= start_seconds:
-                     hours = (end_seconds - start_seconds) / 3600
-                 else:
-                     # Crossed midnight
-                     hours = ((86400 - start_seconds) + end_seconds) / 3600
-
-                 total_hours += hours
-
-             active_transaction = db.query(ProcessTransaction.StartTime).filter(
-                 ProcessTransaction.MachineName == machine_name_with_bot,
-                 ProcessTransaction.ProcessStatus == "ONGOING",
-                 ProcessTransaction.StartTime.isnot(None)
-             ).first()
-
-             if active_transaction:
-                 # Calculate time difference from start time to now
-                 start_seconds = active_transaction.StartTime.hour * 3600 + active_transaction.StartTime.minute * 60 + active_transaction.StartTime.second
-                 current_seconds = current_time.hour * 3600 + current_time.minute * 60 + current_time.second
-
-                 if current_seconds >= start_seconds:
-                     hours = (current_seconds - start_seconds) / 3600
-                 else:
-                     # Crossed midnight
-                     hours = ((86400 - start_seconds) + current_seconds) / 3600
-
-                 total_hours += hours
-
-             total_hours = round(total_hours, 1)
-
-             vm_utilization_list.append({
-                 "vmName": vm_name,
-                 "completedTransactions": completed_count,
-                 "utilizationHours": total_hours
-             })
-
-        if vm_utilization_list:
-            top_performer = max(vm_utilization_list, key = lambda x: x["utilizationHours"])
-            top_performer_data = {
-                "vmName": top_performer["vmName"],
-                "utilizationHours": top_performer["utilizationHours"]
+        for row in results:
+            vm_data = {
+                "vmName": row.vmName,
+                "completedTransactions": row.completedTransactions,
+                "utilizationHours": row.utilizationHours
             }
+            vm_utilization_list.append(vm_data)
 
-        else:
-            top_performer_data = {
-                "vmName": "N/A",
-                "utilizationHours": 0.0
-            }
-
-        vm_utilization_list.sort(key = lambda x: x["utilizationHours"], reverse = True)
+            if row.is_top_performer == 1:
+                top_performer_data = {
+                    "vmName": row.vmName,
+                    "utilizationHours": row.utilizationHours
+                }
 
         return {
             "vmUtilization": vm_utilization_list,
             "topPerformer": top_performer_data
         }
-    
+
     except Exception as e:
         print(f"Error in get_vm_utilization: {e}")
         return {
