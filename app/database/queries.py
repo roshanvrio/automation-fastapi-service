@@ -124,6 +124,7 @@ def get_active_vms(db: Session) -> list:
             LEFT JOIN aggregated_stats s
                 ON o.MachineName = s.MachineName
                AND o.ProcessName = s.ProcessName
+            ORDER BY runTimeMinutes DESC
         """)
 
         results = db.execute(query).fetchall()
