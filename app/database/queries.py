@@ -9,9 +9,14 @@ def get_metrics(db: Session) -> dict:
                 SUM(CASE WHEN CaseStatus = 'SUCCESS' THEN 1 ELSE 0 END) as successful,
                 SUM(CASE WHEN ProcessStatus = 'NEW' THEN 1 ELSE 0 END) as total_in_queue,
                 SUM(CASE WHEN CaseStatus = 'ERROR' THEN 1 ELSE 0 END) as errors,
-                CAST(AVG(DATEDIFF(SECOND, StartTime, EndTime) / 60.0) AS INT) as avg_time
+                CAST(AVG(
+                    CASE
+                        WHEN StartTime IS NOT NULL AND EndTime IS NOT NULL
+                        THEN DATEDIFF(SECOND, StartTime, EndTime) / 60.0
+                        ELSE NULL
+                    END
+                ) AS INT) as avg_time
             FROM process_transactions
-            WHERE StartTime IS NOT NULL AND EndTime IS NOT NULL
         """)
 
         result = db.execute(query).fetchone()
