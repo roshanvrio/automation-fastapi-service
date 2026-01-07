@@ -238,18 +238,18 @@ def get_vm_utilization(db: Session) -> dict:
                             WHEN ProcessStatus = 'COMPLETED'
                              AND StartTime IS NOT NULL
                              AND EndTime IS NOT NULL
-                            THEN CAST(DATEDIFF(SECOND, StartTime, EndTime) AS FLOAT) / 3600.0
+                            THEN CAST(DATEDIFF(SECOND, StartTime, EndTime) AS FLOAT) / 60.0
                             ELSE 0
                         END
-                    ) as completed_hours,
+                    ) as completed_minutes,
                     SUM(
                         CASE
                             WHEN ProcessStatus = 'INPROGRESS'
                              AND StartTime IS NOT NULL
-                            THEN CAST(DATEDIFF(SECOND, StartTime, GETDATE()) AS FLOAT) / 3600.0
+                            THEN CAST(DATEDIFF(SECOND, StartTime, GETDATE()) AS FLOAT) / 60.0
                             ELSE 0
                         END
-                    ) as ongoing_hours
+                    ) as ongoing_minutes
                 FROM process_transactions
                 WHERE MachineName IS NOT NULL
                   AND CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
@@ -264,7 +264,7 @@ def get_vm_utilization(db: Session) -> dict:
                 SELECT
                     v.vm_name as vmName,
                     COALESCE(s.completed_count, 0) as completedTransactions,
-                    ROUND(COALESCE(s.completed_hours, 0) + COALESCE(s.ongoing_hours, 0), 1) as utilizationHours
+                    ROUND(COALESCE(s.completed_minutes, 0) + COALESCE(s.ongoing_minutes, 0), 1) as utilizationMinutes
                 FROM all_vms v
                 LEFT JOIN vm_stats s ON
                     -- Handle both VM4 and VM04 formats - match if either exact or with leading zero
@@ -273,32 +273,32 @@ def get_vm_utilization(db: Session) -> dict:
             SELECT
                 vmName,
                 completedTransactions,
-                utilizationHours,
+                utilizationMinutes,
                 CASE
-                    WHEN utilizationHours = MAX(utilizationHours) OVER () THEN 1
+                    WHEN utilizationMinutes = MAX(utilizationMinutes) OVER () THEN 1
                     ELSE 0
                 END as is_top_performer
             FROM vm_utilization
-            ORDER BY utilizationHours DESC
+            ORDER BY utilizationMinutes DESC
         """)
 
         results = db.execute(query).fetchall()
 
         vm_utilization_list = []
-        top_performer_data = {"vmName": "N/A", "utilizationHours": 0.0}
+        top_performer_data = {"vmName": "N/A", "utilizationMinutes": 0.0}
 
         for row in results:
             vm_data = {
                 "vmName": row.vmName,
                 "completedTransactions": row.completedTransactions,
-                "utilizationHours": row.utilizationHours
+                "utilizationMinutes": row.utilizationMinutes
             }
             vm_utilization_list.append(vm_data)
 
             if row.is_top_performer == 1:
                 top_performer_data = {
                     "vmName": row.vmName,
-                    "utilizationHours": row.utilizationHours
+                    "utilizationMinutes": row.utilizationMinutes
                 }
 
         return {
@@ -312,7 +312,7 @@ def get_vm_utilization(db: Session) -> dict:
             "vmUtilization": [],
             "topPerformer": {
                 "vmName": "N/A",
-                "utilizationHours": 0.0
+                "utilizationMinutes": 0.0
             }
         }
 
