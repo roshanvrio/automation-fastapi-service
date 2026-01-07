@@ -232,10 +232,10 @@ def get_vm_utilization(db: Session) -> dict:
                         THEN LEFT(MachineName, LEN(MachineName) - 4)
                         ELSE MachineName
                     END as vm_name,
-                    SUM(CASE WHEN ProcessStatus = 'COMPLETED' THEN 1 ELSE 0 END) as completed_count,
+                    SUM(CASE WHEN ProcessStatus IN ('COMPLETED', 'FAILED') THEN 1 ELSE 0 END) as completed_count,
                     SUM(
                         CASE
-                            WHEN ProcessStatus = 'COMPLETED'
+                            WHEN ProcessStatus IN ('COMPLETED', 'FAILED')
                              AND StartTime IS NOT NULL
                              AND EndTime IS NOT NULL
                             THEN CAST(DATEDIFF(SECOND, StartTime, EndTime) AS FLOAT) / 60.0
