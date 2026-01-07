@@ -87,7 +87,7 @@ def get_active_vms(db: Session) -> list:
                     EmailFrom,
                     RPATool
                 FROM process_transactions
-                WHERE ProcessStatus = 'ONGOING'
+                WHERE ProcessStatus = 'INPROGRESS'
                   AND MachineName IS NOT NULL
             ),
             aggregated_stats AS (
@@ -182,7 +182,7 @@ def get_idle_vms(db: Session) -> list:
                         ELSE MachineName
                     END as vm_name
                 FROM process_transactions
-                WHERE ProcessStatus = 'ONGOING'
+                WHERE ProcessStatus = 'INPROGRESS'
                   AND MachineName IS NOT NULL
             )
             SELECT vm_name
@@ -231,7 +231,7 @@ def get_vm_utilization(db: Session) -> dict:
                     ) as completed_hours,
                     SUM(
                         CASE
-                            WHEN ProcessStatus = 'ONGOING'
+                            WHEN ProcessStatus = 'INPROGRESS'
                              AND StartTime IS NOT NULL
                             THEN CAST(DATEDIFF(SECOND, StartTime, GETDATE()) AS FLOAT) / 3600.0
                             ELSE 0
