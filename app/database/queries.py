@@ -350,6 +350,7 @@ def get_recently_completed_transactions(db: Session) -> dict:
                 transactionId,
                 machineName,
                 processName,
+                ProcessStatus,
                 CaseStatus as outcome
             FROM recently_completed
             ORDER BY EndTime DESC
