@@ -184,13 +184,21 @@ def get_idle_vms(db: Session) -> list:
                 FROM process_transactions
                 WHERE ProcessStatus = 'INPROGRESS'
                   AND MachineName IS NOT NULL
+            ),
+            idle_vms AS (
+                SELECT vm_name
+                FROM all_vms
+                EXCEPT
+                SELECT vm_name
+                FROM active_vms
             )
             SELECT vm_name
-            FROM all_vms
-            EXCEPT
-            SELECT vm_name
-            FROM active_vms
-            ORDER BY vm_name
+            FROM idle_vms
+            ORDER BY
+                -- Extract the prefix (non-numeric part)
+                LEFT(vm_name, PATINDEX('%[0-9]%', vm_name) - 1),
+                -- Extract and sort by the numeric part
+                CAST(SUBSTRING(vm_name, PATINDEX('%[0-9]%', vm_name), LEN(vm_name)) AS INT)
         """)
 
         results = db.execute(query).fetchall()
@@ -252,7 +260,9 @@ def get_vm_utilization(db: Session) -> dict:
                     COALESCE(s.completed_count, 0) as completedTransactions,
                     ROUND(COALESCE(s.completed_hours, 0) + COALESCE(s.ongoing_hours, 0), 1) as utilizationHours
                 FROM all_vms v
-                LEFT JOIN vm_stats s ON v.vm_name = s.vm_name
+                LEFT JOIN vm_stats s ON
+                    -- Handle both VM4 and VM04 formats - match if either exact or with leading zero
+                    (v.vm_name = s.vm_name OR v.vm_name = 'VM0' + SUBSTRING(s.vm_name, 3, LEN(s.vm_name)) OR 'VM0' + SUBSTRING(v.vm_name, 3, LEN(v.vm_name)) = s.vm_name)
             )
             SELECT
                 vmName,
@@ -300,22 +310,26 @@ def get_vm_utilization(db: Session) -> dict:
             }
         }
 
-def get_recently_completed_transactions(db: Session, minutes: int = 1) -> dict:
+def get_recently_completed_transactions(db: Session) -> dict:
     """
-    Get transactions that completed in the last N minutes, grouped by outcome.
+    Get the latest completed transactions, grouped by outcome.
+
+    For testing: Returns latest 50 transactions regardless of time.
+    Once animation works, this should be changed back to time-based filtering.
 
     Args:
         db: Database session
-        minutes: Look back period in minutes (default: 1 minute, covers 10s WebSocket interval)
 
     Returns:
         dict with three lists: successful, error, exception
         Each list contains: transactionId, machineName, processName
     """
     try:
+        # For testing: get the latest 50 completed transactions regardless of time
+        # Once animation works, change this back to time-based filtering
         query = text("""
             WITH recently_completed AS (
-                SELECT
+                SELECT TOP 50
                     ProcessTransactionId as transactionId,
                     MachineName as machineName,
                     ProcessName as processName,
@@ -324,8 +338,9 @@ def get_recently_completed_transactions(db: Session, minutes: int = 1) -> dict:
                     EndTime
                 FROM process_transactions
                 WHERE EndTime IS NOT NULL
-                  AND EndTime >= DATEADD(MINUTE, -:minutes, GETDATE())
                   AND MachineName IS NOT NULL
+                  AND CaseStatus IN ('SUCCESS', 'ERROR', 'EXCEPTION')
+                ORDER BY EndTime DESC
             )
             SELECT
                 transactionId,
@@ -333,13 +348,10 @@ def get_recently_completed_transactions(db: Session, minutes: int = 1) -> dict:
                 processName,
                 CaseStatus as outcome
             FROM recently_completed
-            WHERE
-                (ProcessStatus = 'COMPLETED' AND CaseStatus = 'SUCCESS')
-                OR (ProcessStatus = 'FAILED' AND CaseStatus IN ('ERROR', 'EXCEPTION'))
             ORDER BY EndTime DESC
         """)
 
-        results = db.execute(query, {"minutes": minutes}).fetchall()
+        results = db.execute(query).fetchall()
 
         # Group by outcome
         successful = []
