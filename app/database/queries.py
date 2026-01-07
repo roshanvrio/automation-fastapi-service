@@ -327,7 +327,7 @@ def get_recently_completed_transactions(db: Session) -> dict:
 
     Returns:
         dict with three lists: successful, error, exception
-        Each list contains: transactionId, machineName, processName
+        Each list contains: transactionId, machineName, processName, processStatus, caseStatus
     """
     try:
         query = text("""
@@ -366,7 +366,9 @@ def get_recently_completed_transactions(db: Session) -> dict:
             transaction = {
                 "transactionId": row.transactionId,
                 "machineName": row.machineName,
-                "processName": row.processName
+                "processName": row.processName,
+                "processStatus": row.ProcessStatus,
+                "caseStatus": row.outcome
             }
 
             if row.outcome == 'SUCCESS':
