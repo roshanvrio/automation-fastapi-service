@@ -97,7 +97,7 @@ def get_active_vms(db: Session) -> list:
                     SUM(CASE WHEN ProcessStatus = 'COMPLETED' THEN 1 ELSE 0 END) as completed_count,
                     SUM(CASE
                         WHEN ProcessStatus = 'COMPLETED'
-                         AND CaseStatus = 'SUCCESS'
+                         AND CaseStatus = 'COMPLETED'
                         THEN 1 ELSE 0
                     END) as successful_count,
                     SUM(CASE
@@ -109,6 +109,7 @@ def get_active_vms(db: Session) -> list:
                 GROUP BY MachineName, ProcessName
             )
             SELECT
+                o.ProcessTransactionId as transactionId,
                 o.MachineName as machineName,
                 o.ProcessName as processName,
                 CASE
@@ -133,13 +134,16 @@ def get_active_vms(db: Session) -> list:
         for row in results:
             # Format time display
             total_minutes = row.runTimeMinutes
-            if total_minutes >= 60:
+            if total_minutes is None or total_minutes == 0:
+                last_run_time = "0 mins"
+            elif total_minutes >= 60:
                 hours = total_minutes / 60
                 last_run_time = f"{hours:.1f} Hours"
             else:
                 last_run_time = f"{int(total_minutes)} mins"
 
             active_vms.append({
+                "transactionId": row.transactionId,
                 "machineName": row.machineName,
                 "processName": row.processName,
                 "triggerIndication": row.triggerIndication,
@@ -294,4 +298,78 @@ def get_vm_utilization(db: Session) -> dict:
                 "vmName": "N/A",
                 "utilizationHours": 0.0
             }
+        }
+
+def get_recently_completed_transactions(db: Session, minutes: int = 1) -> dict:
+    """
+    Get transactions that completed in the last N minutes, grouped by outcome.
+
+    Args:
+        db: Database session
+        minutes: Look back period in minutes (default: 1 minute, covers 10s WebSocket interval)
+
+    Returns:
+        dict with three lists: successful, error, exception
+        Each list contains: transactionId, machineName, processName
+    """
+    try:
+        query = text("""
+            WITH recently_completed AS (
+                SELECT
+                    ProcessTransactionId as transactionId,
+                    MachineName as machineName,
+                    ProcessName as processName,
+                    ProcessStatus,
+                    CaseStatus,
+                    EndTime
+                FROM process_transactions
+                WHERE EndTime IS NOT NULL
+                  AND EndTime >= DATEADD(MINUTE, -:minutes, GETDATE())
+                  AND MachineName IS NOT NULL
+            )
+            SELECT
+                transactionId,
+                machineName,
+                processName,
+                CaseStatus as outcome
+            FROM recently_completed
+            WHERE
+                (ProcessStatus = 'COMPLETED' AND CaseStatus = 'SUCCESS')
+                OR (ProcessStatus = 'FAILED' AND CaseStatus IN ('ERROR', 'EXCEPTION'))
+            ORDER BY EndTime DESC
+        """)
+
+        results = db.execute(query, {"minutes": minutes}).fetchall()
+
+        # Group by outcome
+        successful = []
+        error = []
+        exception = []
+
+        for row in results:
+            transaction = {
+                "transactionId": row.transactionId,
+                "machineName": row.machineName,
+                "processName": row.processName
+            }
+
+            if row.outcome == 'SUCCESS':
+                successful.append(transaction)
+            elif row.outcome == 'ERROR':
+                error.append(transaction)
+            elif row.outcome == 'EXCEPTION':
+                exception.append(transaction)
+
+        return {
+            "successful": successful,
+            "error": error,
+            "exception": exception
+        }
+
+    except Exception as e:
+        print(f"Error in get_recently_completed_transactions: {e}")
+        return {
+            "successful": [],
+            "error": [],
+            "exception": []
         }

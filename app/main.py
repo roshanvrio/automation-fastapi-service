@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 import json
 from app.database.connection import SessionLocal
-from app.database.queries import get_metrics, get_queue_priority, get_active_vms, get_idle_vms, get_vm_utilization
+from app.database.queries import get_metrics, get_queue_priority, get_active_vms, get_idle_vms, get_vm_utilization, get_recently_completed_transactions
 
 app = FastAPI(title = "Automation Dashboard Backend API")
 
@@ -53,6 +53,14 @@ async def websocket_dashboard(websocket: WebSocket):
                 })
 
                 #print(f"Sent active VMs data: {active_vms_data}")
+
+                completed_transactions_data = get_recently_completed_transactions(db)
+                await websocket.send_json({
+                    "type": "completed_transactions_update",
+                    "data": completed_transactions_data
+                })
+
+                #print(f"Sent completed transactions data: {completed_transactions_data}")
 
                 idle_vms_data = get_idle_vms(db)
                 await websocket.send_json({
