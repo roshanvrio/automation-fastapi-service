@@ -17,6 +17,7 @@ def get_metrics(db: Session) -> dict:
                     END
                 ) AS INT) as avg_time
             FROM process_transactions
+            WHERE CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
         """)
 
         result = db.execute(query).fetchone()
@@ -52,6 +53,7 @@ def get_queue_priority(db: Session):
                 COUNT(ProcessTransactionId) as totalCount,
                 MAX(RPATool) as rpaTool
             FROM process_transactions
+            WHERE CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
             GROUP BY ProcessName
             HAVING SUM(CASE WHEN ProcessStatus = 'NEW' THEN 1 ELSE 0 END) > 0
             ORDER BY inQueueCount DESC
@@ -89,6 +91,7 @@ def get_active_vms(db: Session) -> list:
                 FROM process_transactions
                 WHERE ProcessStatus = 'INPROGRESS'
                   AND MachineName IS NOT NULL
+                  AND CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
             ),
             aggregated_stats AS (
                 SELECT
@@ -106,6 +109,7 @@ def get_active_vms(db: Session) -> list:
                         THEN 1 ELSE 0
                     END) as failed_count
                 FROM process_transactions
+                WHERE CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
                 GROUP BY MachineName, ProcessName
             )
             SELECT
@@ -184,6 +188,7 @@ def get_idle_vms(db: Session) -> list:
                 FROM process_transactions
                 WHERE ProcessStatus = 'INPROGRESS'
                   AND MachineName IS NOT NULL
+                  AND CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
             ),
             idle_vms AS (
                 SELECT vm_name
@@ -247,6 +252,7 @@ def get_vm_utilization(db: Session) -> dict:
                     ) as ongoing_hours
                 FROM process_transactions
                 WHERE MachineName IS NOT NULL
+                  AND CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
                 GROUP BY
                     CASE
                         WHEN MachineName LIKE '%.BOT'
@@ -312,10 +318,9 @@ def get_vm_utilization(db: Session) -> dict:
 
 def get_recently_completed_transactions(db: Session) -> dict:
     """
-    Get the latest completed transactions, grouped by outcome.
+    Get the latest completed transactions from today, grouped by outcome.
 
-    For testing: Returns latest 50 transactions regardless of time.
-    Once animation works, this should be changed back to time-based filtering.
+    Returns transactions completed today to support completion animations.
 
     Args:
         db: Database session
@@ -325,8 +330,6 @@ def get_recently_completed_transactions(db: Session) -> dict:
         Each list contains: transactionId, machineName, processName
     """
     try:
-        # For testing: get the latest 50 completed transactions regardless of time
-        # Once animation works, change this back to time-based filtering
         query = text("""
             WITH recently_completed AS (
                 SELECT TOP 50
@@ -340,6 +343,7 @@ def get_recently_completed_transactions(db: Session) -> dict:
                 WHERE EndTime IS NOT NULL
                   AND MachineName IS NOT NULL
                   AND CaseStatus IN ('SUCCESS', 'ERROR', 'EXCEPTION')
+                  AND CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
                 ORDER BY EndTime DESC
             )
             SELECT
