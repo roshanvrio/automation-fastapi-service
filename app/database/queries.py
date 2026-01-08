@@ -1,3 +1,4 @@
+import re
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
@@ -392,3 +393,87 @@ def get_recently_completed_transactions(db: Session) -> dict:
             "error": [],
             "exception": []
         }
+
+def get_vm_completed_transactions(db: Session) -> list:
+    """
+    Get all completed transactions (successful and failed) grouped by VM.
+
+    Returns transactions from today, ordered by endTime DESC (most recent first)
+    within each VM.
+
+    Args:
+        db: Database session
+
+    Returns:
+        List of VMs with their completed transactions:
+        [
+            {
+                "machineName": "VM01.BOT",
+                "transactions": [
+                    {
+                        "transactionId": 12345,
+                        "processName": "Invoice Processing",
+                        "caseStatus": "SUCCESS",
+                        "startTime": "2026-01-08 14:25:00",
+                        "endTime": "2026-01-08 14:30:25"
+                    },
+                    ...
+                ]
+            },
+            ...
+        ]
+    """
+    try:
+        query = text("""
+            SELECT
+                MachineName as machineName,
+                ProcessTransactionId as transactionId,
+                ProcessName as processName,
+                CaseStatus as caseStatus,
+                FORMAT(StartTime, 'yyyy-MM-dd HH:mm:ss') as startTime,
+                FORMAT(EndTime, 'yyyy-MM-dd HH:mm:ss') as endTime
+            FROM process_transactions
+            WHERE EndTime IS NOT NULL
+              AND MachineName IS NOT NULL
+              AND CaseStatus IN ('SUCCESS', 'ERROR', 'EXCEPTION')
+              AND CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
+            ORDER BY MachineName ASC, EndTime DESC
+        """)
+
+        results = db.execute(query).fetchall()
+
+        # Group transactions by VM
+        vm_transactions = {}
+        for row in results:
+            machine_name = row.machineName
+
+            if machine_name not in vm_transactions:
+                vm_transactions[machine_name] = []
+
+            vm_transactions[machine_name].append({
+                "transactionId": row.transactionId,
+                "processName": row.processName,
+                "caseStatus": row.caseStatus,
+                "startTime": row.startTime,
+                "endTime": row.endTime
+            })
+
+        # Sort VMs alphanumerically (VM1, VM2, VM10, not VM1, VM10, VM2)
+        def extract_vm_number(name):
+            match = re.search(r'\d+', name)
+            return int(match.group()) if match else 0
+
+        sorted_vms = sorted(vm_transactions.keys(), key=extract_vm_number)
+
+        # Convert to list format with sorted VMs
+        return [
+            {
+                "machineName": machine_name,
+                "transactions": vm_transactions[machine_name]
+            }
+            for machine_name in sorted_vms
+        ]
+
+    except Exception as e:
+        print(f"Error in get_vm_completed_transactions: {e}")
+        return []
