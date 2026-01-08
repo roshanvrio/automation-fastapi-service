@@ -18,7 +18,8 @@ def get_metrics(db: Session) -> dict:
                     END
                 ) AS INT) as avg_time
             FROM process_transactions
-            WHERE CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
+            WHERE ProcessTransactionId IS NOT NULL
+              AND CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
         """)
 
         result = db.execute(query).fetchone()
@@ -54,7 +55,8 @@ def get_queue_priority(db: Session):
                 COUNT(ProcessTransactionId) as totalCount,
                 MAX(RPATool) as rpaTool
             FROM process_transactions
-            WHERE CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
+            WHERE ProcessTransactionId IS NOT NULL
+              AND CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
             GROUP BY ProcessName
             HAVING SUM(CASE WHEN ProcessStatus = 'NEW' THEN 1 ELSE 0 END) > 0
             ORDER BY inQueueCount DESC, processName ASC
@@ -92,6 +94,7 @@ def get_active_vms(db: Session) -> list:
                 FROM process_transactions
                 WHERE ProcessStatus = 'INPROGRESS'
                   AND MachineName IS NOT NULL
+                  AND ProcessTransactionId IS NOT NULL
                   AND CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
             ),
             aggregated_stats AS (
@@ -110,7 +113,8 @@ def get_active_vms(db: Session) -> list:
                         THEN 1 ELSE 0
                     END) as failed_count
                 FROM process_transactions
-                WHERE CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
+                WHERE ProcessTransactionId IS NOT NULL
+                  AND CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
                 GROUP BY MachineName, ProcessName
             )
             SELECT
@@ -189,6 +193,7 @@ def get_idle_vms(db: Session) -> list:
                 FROM process_transactions
                 WHERE ProcessStatus = 'INPROGRESS'
                   AND MachineName IS NOT NULL
+                  AND ProcessTransactionId IS NOT NULL
                   AND CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
             ),
             idle_vms AS (
@@ -253,6 +258,7 @@ def get_vm_utilization(db: Session) -> dict:
                     ) as ongoing_minutes
                 FROM process_transactions
                 WHERE MachineName IS NOT NULL
+                  AND ProcessTransactionId IS NOT NULL
                   AND CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
                 GROUP BY
                     CASE
@@ -343,6 +349,7 @@ def get_recently_completed_transactions(db: Session) -> dict:
                 FROM process_transactions
                 WHERE EndTime IS NOT NULL
                   AND MachineName IS NOT NULL
+                  AND ProcessTransactionId IS NOT NULL
                   AND CaseStatus IN ('SUCCESS', 'ERROR', 'EXCEPTION')
                   AND CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
                 ORDER BY EndTime DESC
@@ -435,6 +442,7 @@ def get_vm_completed_transactions(db: Session) -> list:
             FROM process_transactions
             WHERE EndTime IS NOT NULL
               AND MachineName IS NOT NULL
+              AND ProcessTransactionId IS NOT NULL
               AND CaseStatus IN ('SUCCESS', 'ERROR', 'EXCEPTION')
               AND CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
             ORDER BY MachineName ASC, EndTime DESC
