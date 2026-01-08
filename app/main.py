@@ -93,7 +93,7 @@ async def websocket_dashboard(websocket: WebSocket):
             finally:
                 db.close()
 
-            await asyncio.sleep(10)
+            await asyncio.sleep(5)
         
     except WebSocketDisconnect:
         print("WebSocket Disconnected")

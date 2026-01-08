@@ -13,6 +13,7 @@ def get_metrics(db: Session) -> dict:
                 CAST(AVG(
                     CASE
                         WHEN StartTime IS NOT NULL AND EndTime IS NOT NULL
+                             AND EndTime > StartTime
                         THEN DATEDIFF(SECOND, StartTime, EndTime) / 60.0
                         ELSE NULL
                     END
