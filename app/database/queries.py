@@ -56,7 +56,7 @@ def get_queue_priority(db: Session):
             WHERE CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
             GROUP BY ProcessName
             HAVING SUM(CASE WHEN ProcessStatus = 'NEW' THEN 1 ELSE 0 END) > 0
-            ORDER BY inQueueCount DESC
+            ORDER BY inQueueCount DESC, processName ASC
         """)
 
         results = db.execute(query).fetchall()
