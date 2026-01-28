@@ -293,27 +293,54 @@ def get_vm_utilization(db: Session) -> dict:
         results = db.execute(query).fetchall()
 
         vm_utilization_list = []
-        top_performer_data = {"vmName": "N/A", "utilizationMinutes": 0.0}
+        # top_performer_data = {"vmName": "N/A", "utilizationMinutes": 0.0}
 
+        # for row in results:
+        #     vm_data = {
+        #         "vmName": row.vmName,
+        #         "completedTransactions": row.completedTransactions,
+        #         "utilizationMinutes": row.utilizationMinutes
+        #     }
+        #     vm_utilization_list.append(vm_data)
+
+        #     if row.is_top_performer == 1:
+        #         top_performer_data = {
+        #             "vmName": row.vmName,
+        #             "utilizationMinutes": row.utilizationMinutes
+        #         }
+
+        # return {
+        #     "vmUtilization": vm_utilization_list,
+        #     "topPerformer": top_performer_data
+        # }
+
+        # Revised Top Performing VM when execution hours are zero
+        # Only show top performer if utilization > 0.00 (not for zero-usage VMs)
+
+        top_performer_data = None
+        
         for row in results:
-            vm_data = {
+            vm_utilization_list.append({
                 "vmName": row.vmName,
                 "completedTransactions": row.completedTransactions,
                 "utilizationMinutes": row.utilizationMinutes
-            }
-            vm_utilization_list.append(vm_data)
-
-            if row.is_top_performer == 1:
+                })
+            # Show top performer only if utilization is greater than 0.00
+            # Example: 0.01 hrs will show, but 0.00 hrs will not
+            if (
+                top_performer_data is None
+                and row.is_top_performer == 1
+                and row.utilizationMinutes > 0
+                ):
                 top_performer_data = {
                     "vmName": row.vmName,
                     "utilizationMinutes": row.utilizationMinutes
-                }
+                    }
 
         return {
             "vmUtilization": vm_utilization_list,
-            "topPerformer": top_performer_data
+            "topPerformer": top_performer_data  # Returns None if all VMs have 0.00 hrs
         }
-
     except Exception as e:
         print(f"Error in get_vm_utilization: {e}")
         return {
