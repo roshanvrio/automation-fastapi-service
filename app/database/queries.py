@@ -18,7 +18,7 @@ def get_metrics(db: Session) -> dict:
                         ELSE NULL
                     END
                 ) AS INT) as avg_time
-            FROM VW_process_transactions
+            FROM VW_RPADashboard_New
             WHERE ProcessTransactionId IS NOT NULL
               AND CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
         """)
@@ -55,7 +55,7 @@ def get_queue_priority(db: Session):
                 SUM(CASE WHEN ProcessStatus = 'NEW' THEN 1 ELSE 0 END) as inQueueCount,
                 COUNT(ProcessTransactionId) as totalCount,
                 MAX(RPATool) as rpaTool
-            FROM VW_process_transactions
+            FROM VW_RPADashboard_New
             WHERE ProcessTransactionId IS NOT NULL
               AND CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
             GROUP BY ProcessName
@@ -86,56 +86,59 @@ def get_active_vms(db: Session) -> list:
         query = text("""
             WITH ongoing_vms AS (
                 SELECT
-                    ProcessTransactionId,
-                    MachineName,
-                    ProcessName,
-                    StartTime,
-                    EmailFrom,
-                    RPATool
-                FROM VW_process_transactions
-                WHERE ProcessStatus = 'INPROGRESS'
-                  AND MachineName IS NOT NULL
-                  AND ProcessTransactionId IS NOT NULL
-                  AND CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
+                    r.ProcessTransactionId,
+                    r.MachineName,
+                    r.ProcessName,
+                    r.StartTime,
+                    r.EmailFrom,
+                    r.RPATool
+                FROM VW_RPADashboard_New r
+                WHERE r.ProcessStatus = 'INPROGRESS'
+                    AND r.MachineName IS NOT NULL
+                    AND r.ProcessTransactionId IS NOT NULL
+                    AND CAST(r.CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
             ),
             aggregated_stats AS (
                 SELECT
-                    MachineName,
-                    ProcessName,
-                    SUM(CASE WHEN ProcessStatus = 'COMPLETED' THEN 1 ELSE 0 END) as completed_count,
-                    SUM(CASE
-                        WHEN ProcessStatus = 'COMPLETED'
-                         AND CaseStatus = 'COMPLETED'
+                r.MachineName,
+                r.ProcessName,
+                SUM(CASE WHEN r.ProcessStatus = 'COMPLETED' THEN 1 ELSE 0 END) as completed_count,
+                SUM(CASE
+                        WHEN r.ProcessStatus = 'COMPLETED'
+                        AND r.CaseStatus = 'COMPLETED'
                         THEN 1 ELSE 0
                     END) as successful_count,
-                    SUM(CASE
-                        WHEN ProcessStatus = 'FAILED'
-                         AND CaseStatus IN ('ERROR', 'EXCEPTION')
+                SUM(CASE
+                        WHEN r.ProcessStatus = 'FAILED'
+                        AND r.CaseStatus IN ('ERROR', 'EXCEPTION')
                         THEN 1 ELSE 0
-                    END) as failed_count
-                FROM VW_process_transactions
-                WHERE ProcessTransactionId IS NOT NULL
-                  AND CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
-                GROUP BY MachineName, ProcessName
+                        END) as failed_count
+                FROM VW_RPADashboard_New r
+                WHERE r.ProcessTransactionId IS NOT NULL
+                    AND CAST(r.CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
+                GROUP BY r.MachineName, r.ProcessName
             )
             SELECT
                 o.ProcessTransactionId as transactionId,
-                o.MachineName as machineName,
-                o.ProcessName as processName,
-                CASE
-                    WHEN o.EmailFrom IS NOT NULL THEN 'Email'
-                    ELSE 'Scheduled'
-                END as triggerIndication,
-                COALESCE(s.completed_count, 0) as completedTransactions,
-                CAST(DATEDIFF(SECOND, o.StartTime, GETDATE()) / 60 AS INT) as runTimeMinutes,
-                o.RPATool as rpaTool,
-                COALESCE(s.successful_count, 0) as successfulCount,
-                COALESCE(s.failed_count, 0) as failedCount
-            FROM ongoing_vms o
-            LEFT JOIN aggregated_stats s
-                ON o.MachineName = s.MachineName
-               AND o.ProcessName = s.ProcessName
-            ORDER BY runTimeMinutes DESC
+                    COALESCE(m.UserName, o.MachineName) as machineName,
+                    o.ProcessName as processName,
+                    CASE
+                        WHEN o.EmailFrom IS NOT NULL THEN 'Email'
+                        ELSE 'Scheduled'
+                    END as triggerIndication,
+                    COALESCE(s.completed_count, 0) as completedTransactions,
+                    CAST(DATEDIFF(SECOND, o.StartTime, GETDATE()) / 60 AS INT) as runTimeMinutes,
+                    o.RPATool as rpaTool,
+                    COALESCE(s.successful_count, 0) as successfulCount,
+                    COALESCE(s.failed_count, 0) as failedCount
+                FROM ongoing_vms o
+                LEFT JOIN aggregated_stats s
+                    ON o.MachineName = s.MachineName
+                    AND o.ProcessName = s.ProcessName
+                LEFT JOIN [RPA_CoE_Dev_Manna].[dbo].[tblMachineDetails] m
+                    ON o.MachineName = m.MachineName
+                ORDER BY runTimeMinutes DESC;
+
         """)
 
         results = db.execute(query).fetchall()
@@ -174,47 +177,36 @@ def get_idle_vms(db: Session) -> list:
     try:
         query = text("""
             WITH all_vms AS (
-                SELECT [Automation Anywhere VMs] as vm_name
-                FROM vm_pool
-                WHERE [Automation Anywhere VMs] IS NOT NULL
-
-                UNION
-
-                SELECT [Uipath VMs] as vm_name
-                FROM vm_pool
-                WHERE [Uipath VMs] IS NOT NULL
+                SELECT MachineName
+                FROM [RPA_CoE_Dev_Manna].[dbo].[tblMachineDetails]
+                WHERE MachineName IS NOT NULL
+                    AND Active = 1
             ),
             active_vms AS (
                 SELECT DISTINCT
-                    CASE
-                        WHEN MachineName LIKE '%.BOT'
-                        THEN LEFT(MachineName, LEN(MachineName) - 4)
-                        ELSE MachineName
-                    END as vm_name
-                FROM VW_process_transactions
+                    MachineName
+                FROM [dbo].[VW_RPADashboard_New]
                 WHERE ProcessStatus = 'INPROGRESS'
-                  AND MachineName IS NOT NULL
-                  AND ProcessTransactionId IS NOT NULL
-                  AND CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
+                    AND MachineName IS NOT NULL
+                    AND ProcessTransactionId IS NOT NULL
+                    AND CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
             ),
             idle_vms AS (
-                SELECT vm_name
+                SELECT MachineName
                 FROM all_vms
                 EXCEPT
-                SELECT vm_name
+                SELECT MachineName
                 FROM active_vms
             )
-            SELECT vm_name
-            FROM idle_vms
-            ORDER BY
-                -- Extract the prefix (non-numeric part)
-                LEFT(vm_name, PATINDEX('%[0-9]%', vm_name) - 1),
-                -- Extract and sort by the numeric part
-                CAST(SUBSTRING(vm_name, PATINDEX('%[0-9]%', vm_name), LEN(vm_name)) AS INT)
+            SELECT DISTINCT m.UserName
+            FROM idle_vms i
+            LEFT JOIN [RPA_CoE_Dev_Manna].[dbo].[tblMachineDetails] m
+                ON i.MachineName = m.MachineName
+            ORDER BY m.UserName;
         """)
 
         results = db.execute(query).fetchall()
-        return [row.vm_name for row in results]
+        return [row.UserName for row in results]
 
     except Exception as e:
         print(f"Error in get_idle_vms: {e}")
@@ -224,70 +216,68 @@ def get_vm_utilization(db: Session) -> dict:
     try:
         query = text("""
             WITH all_vms AS (
-                SELECT [Automation Anywhere VMs] as vm_name
-                FROM vm_pool
-                WHERE [Automation Anywhere VMs] IS NOT NULL
-                UNION
-                SELECT [Uipath VMs] as vm_name
-                FROM vm_pool
-                WHERE [Uipath VMs] IS NOT NULL
+            SELECT TOP(35)
+                MachineName,
+                UserName
+            FROM [RPA_CoE_Dev_Manna].[dbo].[tblMachineDetails]
+            WHERE MachineName IS NOT NULL
+                AND Active = 1
             ),
             vm_stats AS (
                 SELECT
-                    CASE
-                        WHEN MachineName LIKE '%.BOT'
-                        THEN LEFT(MachineName, LEN(MachineName) - 4)
-                        ELSE MachineName
-                    END as vm_name,
-                    SUM(CASE WHEN ProcessStatus IN ('COMPLETED', 'FAILED') THEN 1 ELSE 0 END) as completed_count,
+                    MachineName,
+                    SUM(CASE
+                            WHEN ProcessStatus IN ('COMPLETED', 'FAILED')
+                            THEN 1 ELSE 0
+                        END) AS completed_count,
                     SUM(
                         CASE
                             WHEN ProcessStatus IN ('COMPLETED', 'FAILED')
-                             AND StartTime IS NOT NULL
-                             AND EndTime IS NOT NULL
+                                AND StartTime IS NOT NULL
+                                AND EndTime IS NOT NULL
                             THEN CAST(DATEDIFF(SECOND, StartTime, EndTime) AS FLOAT) / 60.0
                             ELSE 0
                         END
-                    ) as completed_minutes,
+                    ) AS completed_minutes,
                     SUM(
                         CASE
                             WHEN ProcessStatus = 'INPROGRESS'
-                             AND StartTime IS NOT NULL
+                                AND StartTime IS NOT NULL
                             THEN CAST(DATEDIFF(SECOND, StartTime, GETDATE()) AS FLOAT) / 60.0
                             ELSE 0
                         END
-                    ) as ongoing_minutes
-                FROM VW_process_transactions
+                    ) AS ongoing_minutes
+                FROM [dbo].[VW_RPADashboard_New]
                 WHERE MachineName IS NOT NULL
-                  AND ProcessTransactionId IS NOT NULL
-                  AND CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
-                GROUP BY
-                    CASE
-                        WHEN MachineName LIKE '%.BOT'
-                        THEN LEFT(MachineName, LEN(MachineName) - 4)
-                        ELSE MachineName
-                    END
+                    AND ProcessTransactionId IS NOT NULL
+                    AND CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
+                GROUP BY MachineName
             ),
             vm_utilization AS (
                 SELECT
-                    v.vm_name as vmName,
-                    COALESCE(s.completed_count, 0) as completedTransactions,
-                    ROUND(COALESCE(s.completed_minutes, 0) + COALESCE(s.ongoing_minutes, 0), 1) as utilizationMinutes
-                FROM all_vms v
-                LEFT JOIN vm_stats s ON
-                    -- Handle both VM4 and VM04 formats - match if either exact or with leading zero
-                    (v.vm_name = s.vm_name OR v.vm_name = 'VM0' + SUBSTRING(s.vm_name, 3, LEN(s.vm_name)) OR 'VM0' + SUBSTRING(v.vm_name, 3, LEN(v.vm_name)) = s.vm_name)
-            )
-            SELECT
-                vmName,
-                completedTransactions,
-                utilizationMinutes,
-                CASE
-                    WHEN utilizationMinutes = MAX(utilizationMinutes) OVER () THEN 1
-                    ELSE 0
-                END as is_top_performer
-            FROM vm_utilization
-            ORDER BY utilizationMinutes DESC
+            a.MachineName,
+            a.UserName,
+            COALESCE(s.completed_count, 0) AS completedTransactions,
+            ROUND(
+                    COALESCE(s.completed_minutes, 0)
+                    + COALESCE(s.ongoing_minutes, 0),
+                    1
+            ) AS utilizationMinutes
+        FROM all_vms a
+        LEFT JOIN vm_stats s
+            ON a.MachineName = s.MachineName
+    )
+    SELECT
+        UserName AS vmName,
+        completedTransactions,
+        utilizationMinutes,
+        CASE
+            WHEN utilizationMinutes = MAX(utilizationMinutes) OVER ()
+            THEN 1
+            ELSE 0
+        END AS is_top_performer
+    FROM vm_utilization
+    ORDER BY utilizationMinutes DESC;
         """)
 
         results = db.execute(query).fetchall()
@@ -374,7 +364,7 @@ def get_recently_completed_transactions(db: Session) -> dict:
                     ProcessStatus,
                     CaseStatus,
                     EndTime
-                FROM VW_process_transactions
+                FROM VW_RPADashboard_New
                 WHERE EndTime IS NOT NULL
                   AND MachineName IS NOT NULL
                   AND ProcessTransactionId IS NOT NULL
@@ -467,7 +457,7 @@ def get_vm_completed_transactions(db: Session) -> list:
                 CaseStatus as caseStatus,
                 FORMAT(StartTime, 'yyyy-MM-dd HH:mm:ss') as startTime,
                 FORMAT(EndTime, 'yyyy-MM-dd HH:mm:ss') as endTime
-            FROM VW_process_transactions
+            FROM VW_RPADashboard_New
             WHERE EndTime IS NOT NULL
               AND MachineName IS NOT NULL
               AND ProcessTransactionId IS NOT NULL
@@ -513,3 +503,6 @@ def get_vm_completed_transactions(db: Session) -> list:
     except Exception as e:
         print(f"Error in get_vm_completed_transactions: {e}")
         return []
+    
+
+
