@@ -173,18 +173,46 @@ def get_active_vms(db: Session) -> list:
         print(f"Error in get_active_vms: {e}")
         return []
     
+# def get_idle_vms(db: Session) -> list:
+#     try:
+#         query = text("""
+#             WITH all_vms AS (
+#                 SELECT MachineName
+#                 FROM [RPA_CoE_Dev_Manna].[dbo].[tblMachineDetails]
+#                 WHERE MachineName IS NOT NULL
+#                     AND Active = 1
+#             ),
+#             active_vms AS (
+#                 SELECT DISTINCT
+#                     MachineName
+#                 FROM [dbo].[VW_RPADashboard_New]
+#                 WHERE ProcessStatus = 'INPROGRESS'
+#                     AND MachineName IS NOT NULL
+#                     AND ProcessTransactionId IS NOT NULL
+#                     AND CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
+#             ),
+#             idle_vms AS (
+#                 SELECT MachineName
+#                 FROM all_vms
+#                 EXCEPT
+#                 SELECT MachineName
+#                 FROM active_vms
+#             )
+#             SELECT DISTINCT m.UserName
+#             FROM idle_vms i
+#             LEFT JOIN [RPA_CoE_Dev_Manna].[dbo].[tblMachineDetails] m
+#                 ON i.MachineName = m.MachineName
+#             ORDER BY m.UserName;
+#         """)
+
+from sqlalchemy.orm import Session
+from sqlalchemy import text
+
 def get_idle_vms(db: Session) -> list:
     try:
         query = text("""
-            WITH all_vms AS (
-                SELECT MachineName
-                FROM [RPA_CoE_Dev_Manna].[dbo].[tblMachineDetails]
-                WHERE MachineName IS NOT NULL
-                    AND Active = 1
-            ),
-            active_vms AS (
-                SELECT DISTINCT
-                    MachineName
+            WITH active_vms AS (
+                SELECT DISTINCT MachineName
                 FROM [dbo].[VW_RPADashboard_New]
                 WHERE ProcessStatus = 'INPROGRESS'
                     AND MachineName IS NOT NULL
@@ -193,15 +221,17 @@ def get_idle_vms(db: Session) -> list:
             ),
             idle_vms AS (
                 SELECT MachineName
-                FROM all_vms
-                EXCEPT
-                SELECT MachineName
-                FROM active_vms
+                FROM [RPA_CoE_Dev_Manna].[dbo].[tblMachineDetails]
+                WHERE MachineName IS NOT NULL
+                    AND (
+                        Active = 0
+                        OR MachineName NOT IN (SELECT MachineName FROM active_vms)
+                    )
             )
             SELECT DISTINCT m.UserName
-            FROM idle_vms i
-            LEFT JOIN [RPA_CoE_Dev_Manna].[dbo].[tblMachineDetails] m
-                ON i.MachineName = m.MachineName
+            FROM [RPA_CoE_Dev_Manna].[dbo].[tblMachineDetails] m
+            JOIN idle_vms i
+                ON m.MachineName = i.MachineName
             ORDER BY m.UserName;
         """)
 
@@ -211,17 +241,18 @@ def get_idle_vms(db: Session) -> list:
     except Exception as e:
         print(f"Error in get_idle_vms: {e}")
         return []
+
     
 def get_vm_utilization(db: Session) -> dict:
     try:
         query = text("""
             WITH all_vms AS (
-            SELECT TOP(35)
+            SELECT
                 MachineName,
                 UserName
             FROM [RPA_CoE_Dev_Manna].[dbo].[tblMachineDetails]
             WHERE MachineName IS NOT NULL
-                AND Active = 1
+                --AND Active = 1
             ),
             vm_stats AS (
                 SELECT
@@ -267,7 +298,7 @@ def get_vm_utilization(db: Session) -> dict:
         LEFT JOIN vm_stats s
             ON a.MachineName = s.MachineName
     )
-    SELECT
+    SELECT TOP (35)
         UserName AS vmName,
         completedTransactions,
         utilizationMinutes,
@@ -357,11 +388,11 @@ def get_recently_completed_transactions(db: Session) -> dict:
     try:
         query = text("""
             WITH recently_completed AS (
-                SELECT TOP 50
+                SELECT              --TOP 50
                     ProcessTransactionId as transactionId,
                     MachineName as machineName,
                     ProcessName as processName,
-                    ProcessStatus,
+                    ProcessStatus, 
                     CaseStatus,
                     EndTime
                 FROM VW_RPADashboard_New
@@ -370,7 +401,7 @@ def get_recently_completed_transactions(db: Session) -> dict:
                   AND ProcessTransactionId IS NOT NULL
                   AND CaseStatus IN ('SUCCESS', 'ERROR', 'EXCEPTION')
                   AND CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
-                ORDER BY EndTime DESC
+                --ORDER BY EndTime DESC
             )
             SELECT
                 transactionId,
