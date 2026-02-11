@@ -228,7 +228,7 @@ def get_idle_vms(db: Session) -> list:
                     AND CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
             ),
             idle_vms AS (
-                SELECT TOP(44)
+                SELECT
                      MachineName
                 FROM [RPA_CoE_Dev_Manna].[dbo].[tblMachineDetails]
                 WHERE MachineName IS NOT NULL
