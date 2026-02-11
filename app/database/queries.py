@@ -6,21 +6,29 @@ def get_metrics(db: Session) -> dict:
     try:
         query = text("""
             SELECT
-                SUM(CASE WHEN CaseStatus = 'EXCEPTION' THEN 1 ELSE 0 END) as exceptions,
-                SUM(CASE WHEN CaseStatus = 'SUCCESS' THEN 1 ELSE 0 END) as successful,
-                SUM(CASE WHEN ProcessStatus = 'NEW' THEN 1 ELSE 0 END) as total_in_queue,
-                SUM(CASE WHEN CaseStatus = 'ERROR' THEN 1 ELSE 0 END) as errors,
-                CAST(AVG(
-                    CASE
-                        WHEN StartTime IS NOT NULL AND EndTime IS NOT NULL
-                             AND EndTime > StartTime
-                        THEN DATEDIFF(SECOND, StartTime, EndTime) / 60.0
-                        ELSE NULL
-                    END
-                ) AS INT) as avg_time
-            FROM VW_RPADashboard_New
-            WHERE ProcessTransactionId IS NOT NULL
-              AND CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
+                SUM(CASE WHEN CaseStatus = 'EXCEPTION' THEN 1 ELSE 0 END) AS exceptions,
+                SUM(CASE WHEN CaseStatus = 'SUCCESS' THEN 1 ELSE 0 END) AS successful,
+                SUM(CASE WHEN ProcessStatus = 'NEW' THEN 1 ELSE 0 END) AS total_in_queue,
+                SUM(CASE WHEN CaseStatus = 'ERROR' THEN 1 ELSE 0 END) AS errors,
+
+            CAST(AVG(
+                CASE 
+                    WHEN StartTime IS NOT NULL 
+                        AND EndTime IS NOT NULL
+                        AND EndTime > StartTime
+                    THEN DATEDIFF(SECOND, StartTime, EndTime) / 60.0
+
+                 WHEN StartTime IS NOT NULL 
+                        AND ProcessStatus = 'INPROGRESS'
+                    THEN DATEDIFF(SECOND, StartTime, GETDATE()) / 60.0
+
+                    ELSE NULL
+                END
+            ) AS INT) AS avg_time
+
+        FROM VW_RPADashboard_New
+        WHERE ProcessTransactionId IS NOT NULL
+            AND CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE);
         """)
 
         result = db.execute(query).fetchone()
