@@ -6,29 +6,47 @@ def get_metrics(db: Session) -> dict:
     try:
         query = text("""
             SELECT
-                SUM(CASE WHEN CaseStatus = 'EXCEPTION' THEN 1 ELSE 0 END) AS exceptions,
-                SUM(CASE WHEN CaseStatus = 'SUCCESS' THEN 1 ELSE 0 END) AS successful,
-                SUM(CASE WHEN ProcessStatus = 'NEW' THEN 1 ELSE 0 END) AS total_in_queue,
-                SUM(CASE WHEN CaseStatus = 'ERROR' THEN 1 ELSE 0 END) AS errors,
+                SUM(CASE 
+                    WHEN CaseStatus = 'EXCEPTION' 
+                         AND CAST(EndTime AS DATE) = CAST(GETDATE() AS DATE)
+                    THEN 1 ELSE 0 
+                    END) AS exceptions,
 
-            CAST(AVG(
-                CASE 
-                    WHEN StartTime IS NOT NULL 
-                        AND EndTime IS NOT NULL
-                        AND EndTime > StartTime
-                    THEN DATEDIFF(SECOND, StartTime, EndTime) / 60.0
+                SUM(CASE 
+                    WHEN CaseStatus = 'SUCCESS' 
+                         AND CAST(EndTime AS DATE) = CAST(GETDATE() AS DATE)
+                    THEN 1 ELSE 0 
+                    END) AS successful,
 
-                 WHEN StartTime IS NOT NULL 
-                        AND ProcessStatus = 'INPROGRESS'
-                    THEN DATEDIFF(SECOND, StartTime, GETDATE()) / 60.0
+                SUM(CASE 
+                    WHEN CaseStatus = 'ERROR' 
+                         AND CAST(EndTime AS DATE) = CAST(GETDATE() AS DATE)
+                    THEN 1 ELSE 0 
+                    END) AS errors,
+                SUM(CASE 
+                    WHEN ProcessStatus = 'NEW'
+                        AND CaseStatus= 'NEW'
+                    THEN 1 ELSE 0 
+                    END) AS total_in_queue,
 
-                    ELSE NULL
-                END
-            ) AS INT) AS avg_time
+                CAST(AVG(
+                    CASE 
+                        WHEN StartTime IS NOT NULL 
+                             AND EndTime IS NOT NULL
+                             AND EndTime > StartTime
+                             AND CAST(EndTime AS DATE) = CAST(GETDATE() AS DATE)
+                        THEN DATEDIFF(SECOND, StartTime, EndTime) / 60.0
 
-        FROM VW_RPADashboard_New
-        WHERE ProcessTransactionId IS NOT NULL
-            AND CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE);
+                        WHEN StartTime IS NOT NULL 
+                             AND ProcessStatus = 'INPROGRESS'
+                        THEN DATEDIFF(SECOND, StartTime, GETDATE()) / 60.0
+
+                        ELSE NULL
+                    END
+                ) AS INT) AS avg_time
+
+            FROM VW_RPADashboard_New
+            WHERE ProcessTransactionId IS NOT NULL;
         """)
 
         result = db.execute(query).fetchone()
@@ -93,7 +111,7 @@ def get_active_vms(db: Session) -> list:
     try:
         query = text("""
             WITH ongoing_vms AS (
-                SELECT
+                SELECT TOP(40)
                     r.ProcessTransactionId,
                     r.MachineName,
                     r.ProcessName,
@@ -104,7 +122,7 @@ def get_active_vms(db: Session) -> list:
                 WHERE r.ProcessStatus = 'INPROGRESS'
                     AND r.MachineName IS NOT NULL
                     AND r.ProcessTransactionId IS NOT NULL
-                    AND CAST(r.CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
+                    -- AND CAST(r.CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
             ),
             aggregated_stats AS (
                 SELECT
@@ -123,7 +141,7 @@ def get_active_vms(db: Session) -> list:
                         END) as failed_count
                 FROM VW_RPADashboard_New r
                 WHERE r.ProcessTransactionId IS NOT NULL
-                    AND CAST(r.CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
+                    AND CAST(r.EndTime AS DATE) = CAST(GETDATE() AS DATE)
                 GROUP BY r.MachineName, r.ProcessName
             )
             SELECT
@@ -290,7 +308,7 @@ def get_vm_utilization(db: Session) -> dict:
                 FROM [dbo].[VW_RPADashboard_New]
                 WHERE MachineName IS NOT NULL
                     AND ProcessTransactionId IS NOT NULL
-                    AND CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
+                    AND CAST(EndTime AS DATE) = CAST(GETDATE() AS DATE)
                 GROUP BY MachineName
             ),
             vm_utilization AS (
@@ -307,7 +325,7 @@ def get_vm_utilization(db: Session) -> dict:
         LEFT JOIN vm_stats s
             ON a.MachineName = s.MachineName
     )
-    SELECT TOP (35)
+    SELECT
         UserName AS vmName,
         completedTransactions,
         utilizationMinutes,
