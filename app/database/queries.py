@@ -37,9 +37,9 @@ def get_metrics(db: Session) -> dict:
                              AND CAST(EndTime AS DATE) = CAST(GETDATE() AS DATE)
                         THEN DATEDIFF(SECOND, StartTime, EndTime) / 60.0
 
-                        WHEN StartTime IS NOT NULL 
-                             AND ProcessStatus = 'INPROGRESS'
-                        THEN DATEDIFF(SECOND, StartTime, GETDATE()) / 60.0
+                        -- WHEN StartTime IS NOT NULL 
+                              --AND ProcessStatus = 'INPROGRESS'
+                        --THEN DATEDIFF(SECOND, StartTime, GETDATE()) / 60.0
 
                         ELSE NULL
                     END
@@ -83,9 +83,9 @@ def get_queue_priority(db: Session):
                 MAX(RPATool) as rpaTool
             FROM VW_RPADashboard_New
             WHERE ProcessTransactionId IS NOT NULL
-              AND CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
+              -- AND CAST(StartTime AS DATE) = CAST(GETDATE() AS DATE)
             GROUP BY ProcessName
-            HAVING SUM(CASE WHEN ProcessStatus = 'NEW' THEN 1 ELSE 0 END) > 0
+            --HAVING SUM(CASE WHEN ProcessStatus = 'NEW' THEN 1 ELSE 0 END) > 0
             ORDER BY inQueueCount DESC, processName ASC
         """)
 
@@ -239,7 +239,7 @@ def get_idle_vms(db: Session) -> list:
         query = text("""
             WITH active_vms AS (
                 SELECT DISTINCT MachineName
-                FROM [dbo].[VW_RPADashboard_New]
+                FROM dbo.VW_RPADashboard_New
                 WHERE ProcessStatus = 'INPROGRESS'
                     AND MachineName IS NOT NULL
                     AND ProcessTransactionId IS NOT NULL
@@ -248,7 +248,7 @@ def get_idle_vms(db: Session) -> list:
             idle_vms AS (
                 SELECT
                      MachineName
-                FROM [RPA_CoE_Dev_Manna].[dbo].[tblMachineDetails]
+                FROM dbo.tblMachineDetails
                 WHERE MachineName IS NOT NULL
                     AND (
                         Active = 0
@@ -256,7 +256,7 @@ def get_idle_vms(db: Session) -> list:
                     )
             )
             SELECT DISTINCT m.UserName
-            FROM [RPA_CoE_Dev_Manna].[dbo].[tblMachineDetails] m
+            FROM dbo.tblMachineDetails m
             JOIN idle_vms i
                 ON m.MachineName = i.MachineName
             ORDER BY m.UserName;
@@ -270,72 +270,114 @@ def get_idle_vms(db: Session) -> list:
         return []
 
     
+# def get_vm_utilization(db: Session) -> dict:
+#     try:
+#         query = text("""
+#                 WITH vm_stats AS (
+#                 SELECT
+#                 MachineName,
+#                 SUM(CASE 
+#                     WHEN ProcessStatus IN ('COMPLETED','FAILED')
+#                         AND CAST(EndTime AS DATE) = CAST(GETDATE() AS DATE)
+#                         AND StartTime IS NOT NULL
+#                     THEN 1 ELSE 0
+#                 END) AS completedTransactions,
+#                 SUM(CASE 
+#                     WHEN ProcessStatus IN ('COMPLETED','FAILED')
+#                         AND CAST(EndTime AS DATE) = CAST(GETDATE() AS DATE)
+#                         AND StartTime IS NOT NULL
+#                     THEN CAST(DATEDIFF(SECOND, StartTime, EndTime)/60.0 AS FLOAT) ELSE 0
+#                 END) AS completed_minutes,
+#                 SUM(CASE 
+#                     WHEN ProcessStatus = 'INPROGRESS' 
+#                         AND CaseStatus = 'INPROGRESS'
+#                         AND StartTime IS NOT NULL
+#                     THEN CAST(DATEDIFF(SECOND, StartTime, GETDATE())/60.0 AS FLOAT) ELSE 0
+#                 END) AS ongoing_minutes
+#             FROM VW_RPADashboard_New
+#             WHERE MachineName IS NOT NULL
+#             GROUP BY MachineName
+#                      )
+#             SELECT
+#             COALESCE(m.UserName, s.MachineName) AS vmName,
+#             s.completedTransactions,
+#             ROUND(s.completed_minutes + s.ongoing_minutes,1) AS utilizationMinutes,
+#             CASE
+#                 WHEN ROUND(s.completed_minutes + s.ongoing_minutes,1) = 
+#                      MAX(ROUND(s.completed_minutes + s.ongoing_minutes,1)) OVER () THEN 1
+#             ELSE 0
+#             END AS is_top_performer
+#             FROM vm_stats s
+#             LEFT JOIN tblMachineDetails m
+#             ON s.MachineName = m.MachineName
+#             ORDER BY utilizationMinutes DESC;
+#         """)
+
+#         results = db.execute(query).fetchall()
+
 def get_vm_utilization(db: Session) -> dict:
     try:
         query = text("""
-            WITH all_vms AS (
+           WITH vm_stats AS (
             SELECT
-                MachineName,
-                UserName
-            FROM [RPA_CoE_Dev_Manna].[dbo].[tblMachineDetails]
+            MachineName,
+            (SELECT TOP 1 UserName 
+            FROM [RPA_CoE_Dev_Manna].[dbo].[tblMachineDetails] m
+            WHERE m.MachineName = v.MachineName) AS vmName,
+            SUM(CASE 
+                WHEN ProcessStatus IN ('COMPLETED','FAILED')
+                     AND CAST(EndTime AS DATE) = CAST(GETDATE() AS DATE)
+                     AND StartTime IS NOT NULL
+                THEN 1 ELSE 0
+                END) AS completedTransactions,
+            SUM(CASE 
+                WHEN ProcessStatus IN ('COMPLETED','FAILED')
+                     AND CAST(EndTime AS DATE) = CAST(GETDATE() AS DATE)
+                     AND StartTime IS NOT NULL
+                THEN CAST(DATEDIFF(SECOND, StartTime, EndTime) AS FLOAT)/60.0
+                ELSE 0
+                END) AS completed_minutes,
+            SUM(CASE 
+                WHEN ProcessStatus = 'INPROGRESS'
+                     AND CaseStatus = 'INPROGRESS'
+                     AND StartTime IS NOT NULL
+                THEN CAST(DATEDIFF(SECOND, StartTime, GETDATE()) AS FLOAT)/60.0
+                ELSE 0
+                END) AS ongoing_minutes
+            FROM [RPA_CoE_Dev_Manna].[dbo].[VW_RPADashboard_New] v
             WHERE MachineName IS NOT NULL
-                --AND Active = 1
+            GROUP BY MachineName
             ),
-            vm_stats AS (
+
+            combined AS (
                 SELECT
-                    MachineName,
-                    SUM(CASE
-                            WHEN ProcessStatus IN ('COMPLETED', 'FAILED')
-                            THEN 1 ELSE 0
-                        END) AS completed_count,
-                    SUM(
-                        CASE
-                            WHEN ProcessStatus IN ('COMPLETED', 'FAILED')
-                                AND StartTime IS NOT NULL
-                                AND EndTime IS NOT NULL
-                            THEN CAST(DATEDIFF(SECOND, StartTime, EndTime) AS FLOAT) / 60.0
-                            ELSE 0
-                        END
-                    ) AS completed_minutes,
-                    SUM(
-                        CASE
-                            WHEN ProcessStatus = 'INPROGRESS'
-                                AND StartTime IS NOT NULL
-                            THEN CAST(DATEDIFF(SECOND, StartTime, GETDATE()) AS FLOAT) / 60.0
-                            ELSE 0
-                        END
-                    ) AS ongoing_minutes
-                FROM [dbo].[VW_RPADashboard_New]
-                WHERE MachineName IS NOT NULL
-                    AND ProcessTransactionId IS NOT NULL
-                    AND CAST(EndTime AS DATE) = CAST(GETDATE() AS DATE)
-                GROUP BY MachineName
-            ),
-            vm_utilization AS (
-                SELECT
-            a.MachineName,
-            a.UserName,
-            COALESCE(s.completed_count, 0) AS completedTransactions,
-            ROUND(
-                    COALESCE(s.completed_minutes, 0)
-                    + COALESCE(s.ongoing_minutes, 0),
-                    1
-            ) AS utilizationMinutes
-        FROM all_vms a
-        LEFT JOIN vm_stats s
-            ON a.MachineName = s.MachineName
-    )
-    SELECT
-        UserName AS vmName,
-        completedTransactions,
-        utilizationMinutes,
-        CASE
-            WHEN utilizationMinutes = MAX(utilizationMinutes) OVER ()
-            THEN 1
-            ELSE 0
-        END AS is_top_performer
-    FROM vm_utilization
-    ORDER BY utilizationMinutes DESC;
+                ISNULL(vmName, MachineName) AS vmName,
+                completedTransactions,
+                completed_minutes,
+                ongoing_minutes
+                FROM vm_stats
+
+                UNION ALL
+                     
+            SELECT
+            UserName AS vmName,
+            0,
+            0,
+            0
+            FROM [RPA_CoE_Dev_Manna].[dbo].[tblMachineDetails]
+                     )
+
+            SELECT
+            vmName,
+            MAX(completedTransactions) AS completedTransactions,
+            ROUND(MAX(completed_minutes + ongoing_minutes),1) AS utilizationMinutes,
+            CASE
+                WHEN ROUND(MAX(completed_minutes + ongoing_minutes),1) = MAX(ROUND(MAX(completed_minutes + ongoing_minutes),1)) OVER ()
+            THEN 1 ELSE 0
+            END AS is_top_performer
+            FROM combined
+            GROUP BY vmName
+            ORDER BY utilizationMinutes DESC;
         """)
 
         results = db.execute(query).fetchall()
