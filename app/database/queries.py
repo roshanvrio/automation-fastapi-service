@@ -29,24 +29,26 @@ def get_metrics(db: Session) -> dict:
                     THEN 1 ELSE 0 
                     END) AS total_in_queue,
 
-                CAST(AVG(
+                Round(AVG(
                     CASE 
                         WHEN StartTime IS NOT NULL 
                              AND EndTime IS NOT NULL
                              AND EndTime > StartTime
-                             AND CAST(EndTime AS DATE) = CAST(GETDATE() AS DATE)
-                        THEN DATEDIFF(SECOND, StartTime, EndTime) / 60.0
+                             -- AND CAST(EndTime AS DATE) = CAST(GETDATE() AS DATE)
+                             AND ProcessStatus IN ('COMPLETED','FAILED')
+                        THEN CAST(DATEDIFF(Minute, StartTime, EndTime) AS FLOAT)
 
                         -- WHEN StartTime IS NOT NULL 
                               --AND ProcessStatus = 'INPROGRESS'
                         --THEN DATEDIFF(SECOND, StartTime, GETDATE()) / 60.0
 
-                        ELSE NULL
+                        --ELSE NULL
                     END
-                ) AS INT) AS avg_time
+                ),2) AS avg_time
 
             FROM VW_RPADashboard_New
-            WHERE ProcessTransactionId IS NOT NULL;
+            WHERE ProcessTransactionId IS NOT NULL
+                    AND CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE);
         """)
 
         result = db.execute(query).fetchone()
@@ -85,7 +87,7 @@ def get_queue_priority(db: Session):
             WHERE ProcessTransactionId IS NOT NULL
               -- AND CAST(StartTime AS DATE) = CAST(GETDATE() AS DATE)
             GROUP BY ProcessName
-            --HAVING SUM(CASE WHEN ProcessStatus = 'NEW' THEN 1 ELSE 0 END) > 0
+            HAVING SUM(CASE WHEN ProcessStatus = 'NEW' THEN 1 ELSE 0 END) > 0
             ORDER BY inQueueCount DESC, processName ASC
         """)
 
