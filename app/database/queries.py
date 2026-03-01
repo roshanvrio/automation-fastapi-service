@@ -148,7 +148,14 @@ def get_active_vms(db: Session) -> list:
             )
             SELECT
                 o.ProcessTransactionId as transactionId,
-                    COALESCE(m.UserName, o.MachineName) as machineName,
+                    COALESCE(
+                        CASE
+                            WHEN m.UserName LIKE '%.BOT%'
+                            THEN LEFT(m.UserName, CHARINDEX('.BOT', m.UserName) - 1)
+                            ELSE m.UserName
+                        END,
+                        o.MachineName
+                    ) AS machineName,
                     o.ProcessName as processName,
                     CASE
                         WHEN o.EmailFrom IS NOT NULL THEN 'Email'
@@ -257,7 +264,12 @@ def get_idle_vms(db: Session) -> list:
                         OR MachineName NOT IN (SELECT MachineName FROM active_vms)
                     )
             )
-            SELECT DISTINCT m.UserName
+            SELECT DISTINCT
+                CASE
+                    WHEN m.UserName LIKE '%.BOT%'
+                    THEN LEFT(m.UserName, CHARINDEX('.BOT', m.UserName) - 1)
+                    ELSE m.UserName
+                END AS UserName
             FROM dbo.tblMachineDetails m
             JOIN idle_vms i
                 ON m.MachineName = i.MachineName
@@ -323,7 +335,12 @@ def get_vm_utilization(db: Session) -> dict:
            WITH vm_stats AS (
             SELECT
             MachineName,
-            (SELECT TOP 1 UserName 
+            (SELECT TOP 1
+                CASE
+                    WHEN UserName LIKE '%.BOT%'
+                    THEN LEFT(UserName, CHARINDEX('.BOT', UserName) - 1)
+                    ELSE UserName
+                END
             FROM [RPA_CoE_Dev_Manna].[dbo].[tblMachineDetails] m
             WHERE m.MachineName = v.MachineName) AS vmName,
             SUM(CASE 
@@ -362,7 +379,11 @@ def get_vm_utilization(db: Session) -> dict:
                 UNION ALL
                      
             SELECT
-            UserName AS vmName,
+            CASE
+                WHEN UserName LIKE '%.BOT%'
+                THEN LEFT(UserName, CHARINDEX('.BOT', UserName) - 1)
+                ELSE UserName
+            END AS vmName,
             0,
             0,
             0
