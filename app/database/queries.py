@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 # View and Table names
-VW_RPA_DASHBOARD = "VW_RPA_DASHBOARD_New"
+VW_RPA_DASHBOARD = "VW_RPADashboard_New"
 TBL_MACHINE_DETAILS = "tblMachineDetails"
 
 def get_metrics(db: Session) -> dict:
