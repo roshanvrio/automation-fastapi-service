@@ -51,8 +51,7 @@ def get_metrics(db: Session) -> dict:
                 ),2) AS avg_time
 
             FROM {VW_RPA_DASHBOARD}
-            WHERE ProcessTransactionId IS NOT NULL
-                    AND CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE);
+            WHERE ProcessTransactionId IS NOT NULL;
         """)
 
         result = db.execute(query).fetchone()
@@ -77,22 +76,21 @@ def get_metrics(db: Session) -> dict:
 def get_queue_priority(db: Session):
     try:
         query = text(f"""
-            SELECT
-                ProcessName as processName,
-                CASE
-                    WHEN MAX(CASE WHEN EmailFrom IS NOT NULL THEN 1 ELSE 0 END) = 1
-                    THEN 'Email'
-                    ELSE 'Schedule'
-                END as triggerIndication,
-                SUM(CASE WHEN ProcessStatus = 'NEW' THEN 1 ELSE 0 END) as inQueueCount,
-                COUNT(ProcessTransactionId) as totalCount,
-                MAX(RPATool) as rpaTool
-            FROM {VW_RPA_DASHBOARD}
-            WHERE ProcessTransactionId IS NOT NULL
-              -- AND CAST(StartTime AS DATE) = CAST(GETDATE() AS DATE)
-            GROUP BY ProcessName
-            HAVING SUM(CASE WHEN ProcessStatus = 'NEW' THEN 1 ELSE 0 END) > 0
-            ORDER BY inQueueCount DESC, processName ASC
+             SELECT
+              ProcessName as processName,
+              CASE
+              WHEN EmailFrom IS NOT NULL THEN 'Email'
+              ELSE 'Scheduled'
+              END as triggerIndication,
+              SUM(CASE WHEN ProcessStatus = 'NEW' and CaseStatus = 'NEW' THEN 1 ELSE 0 END) as inQueueCount,
+              COUNT(ProcessTransactionId) as totalCount,
+              MAX(RPATool) as rpaTool
+          FROM {VW_RPA_DASHBOARD}
+          WHERE ProcessTransactionId IS NOT NULL
+            -- AND CAST(StartTime AS DATE) = CAST(GETDATE() AS DATE)
+          GROUP BY ProcessName,EmailFrom
+          HAVING SUM(CASE WHEN ProcessStatus = 'NEW' and CaseStatus = 'NEW' THEN 1 ELSE 0 END) > 0
+          ORDER BY inQueueCount DESC, ProcessName ASC
         """)
 
         results = db.execute(query).fetchall()
@@ -116,68 +114,57 @@ def get_queue_priority(db: Session):
 def get_active_vms(db: Session) -> list:
     try:
         query = text(f"""
-            WITH ongoing_vms AS (
-                SELECT TOP(40)
-                    r.ProcessTransactionId,
-                    r.MachineName,
-                    r.ProcessName,
-                    r.StartTime,
-                    r.EmailFrom,
-                    r.RPATool
-                FROM {VW_RPA_DASHBOARD} r
-                WHERE r.ProcessStatus = 'INPROGRESS'
-                    AND r.MachineName IS NOT NULL
-                    AND r.ProcessTransactionId IS NOT NULL
-                    -- AND CAST(r.CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
-            ),
-            aggregated_stats AS (
-                SELECT
-                r.MachineName,
-                r.ProcessName,
-                SUM(CASE WHEN r.ProcessStatus = 'COMPLETED' THEN 1 ELSE 0 END) as completed_count,
-                SUM(CASE
-                        WHEN r.ProcessStatus = 'COMPLETED'
-                        AND r.CaseStatus = 'COMPLETED'
-                        THEN 1 ELSE 0
-                    END) as successful_count,
-                SUM(CASE
-                        WHEN r.ProcessStatus = 'FAILED'
-                        AND r.CaseStatus IN ('ERROR', 'EXCEPTION')
-                        THEN 1 ELSE 0
-                        END) as failed_count
-                FROM {VW_RPA_DASHBOARD} r
-                WHERE r.ProcessTransactionId IS NOT NULL
-                    AND CAST(r.EndTime AS DATE) = CAST(GETDATE() AS DATE)
-                GROUP BY r.MachineName, r.ProcessName
-            )
-            SELECT
-                o.ProcessTransactionId as transactionId,
-                    COALESCE(
-                        CASE
-                            WHEN m.UserName LIKE '%.BOT%'
-                            THEN LEFT(m.UserName, CHARINDEX('.BOT', m.UserName) - 1)
-                            ELSE m.UserName
-                        END,
-                        o.MachineName
-                    ) AS machineName,
-                    o.ProcessName as processName,
-                    CASE
-                        WHEN o.EmailFrom IS NOT NULL THEN 'Email'
-                        ELSE 'Scheduled'
-                    END as triggerIndication,
-                    COALESCE(s.completed_count, 0) as completedTransactions,
-                    CAST(DATEDIFF(SECOND, o.StartTime, GETDATE()) / 60 AS INT) as runTimeMinutes,
-                    o.RPATool as rpaTool,
-                    COALESCE(s.successful_count, 0) as successfulCount,
-                    COALESCE(s.failed_count, 0) as failedCount
-                FROM ongoing_vms o
-                LEFT JOIN aggregated_stats s
-                    ON o.MachineName = s.MachineName
-                    AND o.ProcessName = s.ProcessName
-                LEFT JOIN {TBL_MACHINE_DETAILS} m
-                    ON o.MachineName = m.MachineName
-                ORDER BY runTimeMinutes DESC;
-
+    WITH ongoing_vms AS (
+    SELECT
+        r.ProcessTransactionId,
+        r.MachineName,
+        r.ProcessName,
+        r.StartTime,
+        r.EmailFrom,
+        r.RPATool
+    FROM {VW_RPA_DASHBOARD} r
+    WHERE r.ProcessStatus = 'INPROGRESS'
+      AND r.CaseStatus = 'INPROGRESS'
+      AND r.MachineName IS NOT NULL
+      AND r.ProcessTransactionId IS NOT NULL
+),
+aggregated_stats AS (
+    SELECT
+        r.MachineName,
+        r.ProcessName,
+        SUM(CASE WHEN r.ProcessStatus in ('COMPLETED','FAILED') THEN 1 ELSE 0 END) as completed_count,
+        SUM(CASE WHEN r.ProcessStatus = 'COMPLETED' AND r.CaseStatus = 'SUCCESS' THEN 1 ELSE 0 END) as successful_count,
+        SUM(CASE WHEN r.ProcessStatus = 'FAILED' AND r.CaseStatus IN ('ERROR','EXCEPTION') THEN 1 ELSE 0 END) as failed_count
+    FROM {VW_RPA_DASHBOARD} r
+    WHERE r.ProcessTransactionId IS NOT NULL
+      AND CAST(r.EndTime AS DATE) = CAST(GETDATE() AS DATE)
+    GROUP BY r.MachineName, r.ProcessName
+)
+SELECT
+    o.ProcessTransactionId as transactionId,
+    COALESCE(
+        CASE
+            WHEN o.MachineName LIKE '%.BOT%'
+            THEN LEFT(o.MachineName, CHARINDEX('.BOT', o.MachineName) - 1)
+            ELSE o.MachineName
+        END,
+        o.MachineName
+    ) AS machineName,
+    o.ProcessName as processName,
+    CASE
+        WHEN o.EmailFrom IS NOT NULL THEN 'Email'
+        ELSE 'Scheduled'
+    END as triggerIndication,
+    COALESCE(s.completed_count, 0) as completedTransactions,
+    CAST(DATEDIFF(SECOND, o.StartTime, GETDATE()) / 60 AS INT) as runTimeMinutes,
+    o.RPATool as rpaTool,
+    COALESCE(s.successful_count, 0) as successfulCount,
+    COALESCE(s.failed_count, 0) as failedCount
+FROM ongoing_vms o
+LEFT JOIN aggregated_stats s
+    ON o.MachineName = s.MachineName
+    AND o.ProcessName = s.ProcessName
+ORDER BY runTimeMinutes DESC;
         """)
 
         results = db.execute(query).fetchall()
@@ -247,34 +234,28 @@ def get_active_vms(db: Session) -> list:
 def get_idle_vms(db: Session) -> list:
     try:
         query = text(f"""
-            WITH active_vms AS (
+             WITH active_vms AS (
                 SELECT DISTINCT MachineName
                 FROM {VW_RPA_DASHBOARD}
-                WHERE ProcessStatus = 'INPROGRESS'
+                WHERE ProcessStatus = 'INPROGRESS' and CaseStatus = 'INPROGRESS'
                     AND MachineName IS NOT NULL
                     AND ProcessTransactionId IS NOT NULL
-                    AND CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
+                    --AND CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
             ),
             idle_vms AS (
                 SELECT
-                     MachineName
+                    CASE
+                    WHEN UserName LIKE '%.BOT%'
+                    THEN LEFT(UserName, CHARINDEX('.BOT', UserName) - 1)
+                    ELSE UserName
+                END AS UserName
                 FROM {TBL_MACHINE_DETAILS}
-                WHERE MachineName IS NOT NULL
+                WHERE UserName IS NOT NULL
                     AND (
-                        Active = 0
-                        OR MachineName NOT IN (SELECT MachineName FROM active_vms)
+                      UserName NOT IN (SELECT MachineName FROM active_vms)
                     )
             )
-            SELECT DISTINCT
-                CASE
-                    WHEN m.UserName LIKE '%.BOT%'
-                    THEN LEFT(m.UserName, CHARINDEX('.BOT', m.UserName) - 1)
-                    ELSE m.UserName
-                END AS UserName
-            FROM {TBL_MACHINE_DETAILS} m
-            JOIN idle_vms i
-                ON m.MachineName = i.MachineName
-            ORDER BY m.UserName;
+            SELECT * from idle_vms
         """)
 
         results = db.execute(query).fetchall()
@@ -493,7 +474,7 @@ def get_recently_completed_transactions(db: Session) -> dict:
                   AND MachineName IS NOT NULL
                   AND ProcessTransactionId IS NOT NULL
                   AND CaseStatus IN ('SUCCESS', 'ERROR', 'EXCEPTION')
-                  AND CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
+                  --AND CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
                 --ORDER BY EndTime DESC
             )
             SELECT
@@ -586,7 +567,7 @@ def get_vm_completed_transactions(db: Session) -> list:
               AND MachineName IS NOT NULL
               AND ProcessTransactionId IS NOT NULL
               AND CaseStatus IN ('SUCCESS', 'ERROR', 'EXCEPTION')
-              AND CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
+              --AND CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
             ORDER BY MachineName ASC, EndTime DESC
         """)
 
