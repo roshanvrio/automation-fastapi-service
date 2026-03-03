@@ -2,43 +2,47 @@ import re
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
+# View and Table names
+VW_RPA_DASHBOARD = "VW_process_transactions"
+TBL_MACHINE_DETAILS = "vm_pool"
+
 def get_metrics(db: Session) -> dict:
     try:
-        query = text("""
+        query = text(f"""
             SELECT
-                SUM(CASE 
-                    WHEN CaseStatus = 'EXCEPTION' 
+                SUM(CASE
+                    WHEN CaseStatus = 'EXCEPTION'
                          AND CAST(EndTime AS DATE) = CAST(GETDATE() AS DATE)
-                    THEN 1 ELSE 0 
+                    THEN 1 ELSE 0
                     END) AS exceptions,
 
-                SUM(CASE 
-                    WHEN CaseStatus = 'SUCCESS' 
+                SUM(CASE
+                    WHEN CaseStatus = 'SUCCESS'
                          AND CAST(EndTime AS DATE) = CAST(GETDATE() AS DATE)
-                    THEN 1 ELSE 0 
+                    THEN 1 ELSE 0
                     END) AS successful,
 
-                SUM(CASE 
-                    WHEN CaseStatus = 'ERROR' 
+                SUM(CASE
+                    WHEN CaseStatus = 'ERROR'
                          AND CAST(EndTime AS DATE) = CAST(GETDATE() AS DATE)
-                    THEN 1 ELSE 0 
+                    THEN 1 ELSE 0
                     END) AS errors,
-                SUM(CASE 
+                SUM(CASE
                     WHEN ProcessStatus = 'NEW'
                         AND CaseStatus= 'NEW'
-                    THEN 1 ELSE 0 
+                    THEN 1 ELSE 0
                     END) AS total_in_queue,
 
                 Round(AVG(
-                    CASE 
-                        WHEN StartTime IS NOT NULL 
+                    CASE
+                        WHEN StartTime IS NOT NULL
                              AND EndTime IS NOT NULL
                              AND EndTime > StartTime
                              -- AND CAST(EndTime AS DATE) = CAST(GETDATE() AS DATE)
                              AND ProcessStatus IN ('COMPLETED','FAILED')
                         THEN CAST(DATEDIFF(Minute, StartTime, EndTime) AS FLOAT)
 
-                        -- WHEN StartTime IS NOT NULL 
+                        -- WHEN StartTime IS NOT NULL
                               --AND ProcessStatus = 'INPROGRESS'
                         --THEN DATEDIFF(SECOND, StartTime, GETDATE()) / 60.0
 
@@ -46,7 +50,7 @@ def get_metrics(db: Session) -> dict:
                     END
                 ),2) AS avg_time
 
-            FROM VW_RPADashboard_New
+            FROM {VW_RPA_DASHBOARD}
             WHERE ProcessTransactionId IS NOT NULL
                     AND CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE);
         """)
@@ -72,7 +76,7 @@ def get_metrics(db: Session) -> dict:
     
 def get_queue_priority(db: Session):
     try:
-        query = text("""
+        query = text(f"""
             SELECT
                 ProcessName as processName,
                 CASE
@@ -83,7 +87,7 @@ def get_queue_priority(db: Session):
                 SUM(CASE WHEN ProcessStatus = 'NEW' THEN 1 ELSE 0 END) as inQueueCount,
                 COUNT(ProcessTransactionId) as totalCount,
                 MAX(RPATool) as rpaTool
-            FROM VW_RPADashboard_New
+            FROM {VW_RPA_DASHBOARD}
             WHERE ProcessTransactionId IS NOT NULL
               -- AND CAST(StartTime AS DATE) = CAST(GETDATE() AS DATE)
             GROUP BY ProcessName
@@ -111,7 +115,7 @@ def get_queue_priority(db: Session):
 
 def get_active_vms(db: Session) -> list:
     try:
-        query = text("""
+        query = text(f"""
             WITH ongoing_vms AS (
                 SELECT TOP(40)
                     r.ProcessTransactionId,
@@ -120,7 +124,7 @@ def get_active_vms(db: Session) -> list:
                     r.StartTime,
                     r.EmailFrom,
                     r.RPATool
-                FROM VW_RPADashboard_New r
+                FROM {VW_RPA_DASHBOARD} r
                 WHERE r.ProcessStatus = 'INPROGRESS'
                     AND r.MachineName IS NOT NULL
                     AND r.ProcessTransactionId IS NOT NULL
@@ -141,7 +145,7 @@ def get_active_vms(db: Session) -> list:
                         AND r.CaseStatus IN ('ERROR', 'EXCEPTION')
                         THEN 1 ELSE 0
                         END) as failed_count
-                FROM VW_RPADashboard_New r
+                FROM {VW_RPA_DASHBOARD} r
                 WHERE r.ProcessTransactionId IS NOT NULL
                     AND CAST(r.EndTime AS DATE) = CAST(GETDATE() AS DATE)
                 GROUP BY r.MachineName, r.ProcessName
@@ -170,7 +174,7 @@ def get_active_vms(db: Session) -> list:
                 LEFT JOIN aggregated_stats s
                     ON o.MachineName = s.MachineName
                     AND o.ProcessName = s.ProcessName
-                LEFT JOIN [RPA_CoE_Dev_Manna].[dbo].[tblMachineDetails] m
+                LEFT JOIN {TBL_MACHINE_DETAILS} m
                     ON o.MachineName = m.MachineName
                 ORDER BY runTimeMinutes DESC;
 
@@ -240,15 +244,12 @@ def get_active_vms(db: Session) -> list:
 #             ORDER BY m.UserName;
 #         """)
 
-from sqlalchemy.orm import Session
-from sqlalchemy import text
-
 def get_idle_vms(db: Session) -> list:
     try:
-        query = text("""
+        query = text(f"""
             WITH active_vms AS (
                 SELECT DISTINCT MachineName
-                FROM dbo.VW_RPADashboard_New
+                FROM {VW_RPA_DASHBOARD}
                 WHERE ProcessStatus = 'INPROGRESS'
                     AND MachineName IS NOT NULL
                     AND ProcessTransactionId IS NOT NULL
@@ -257,7 +258,7 @@ def get_idle_vms(db: Session) -> list:
             idle_vms AS (
                 SELECT
                      MachineName
-                FROM dbo.tblMachineDetails
+                FROM {TBL_MACHINE_DETAILS}
                 WHERE MachineName IS NOT NULL
                     AND (
                         Active = 0
@@ -270,7 +271,7 @@ def get_idle_vms(db: Session) -> list:
                     THEN LEFT(m.UserName, CHARINDEX('.BOT', m.UserName) - 1)
                     ELSE m.UserName
                 END AS UserName
-            FROM dbo.tblMachineDetails m
+            FROM {TBL_MACHINE_DETAILS} m
             JOIN idle_vms i
                 ON m.MachineName = i.MachineName
             ORDER BY m.UserName;
@@ -331,7 +332,7 @@ def get_idle_vms(db: Session) -> list:
 
 def get_vm_utilization(db: Session) -> dict:
     try:
-        query = text("""
+        query = text(f"""
            WITH vm_stats AS (
             SELECT
             MachineName,
@@ -341,29 +342,29 @@ def get_vm_utilization(db: Session) -> dict:
                     THEN LEFT(UserName, CHARINDEX('.BOT', UserName) - 1)
                     ELSE UserName
                 END
-            FROM [RPA_CoE_Dev_Manna].[dbo].[tblMachineDetails] m
+            FROM {TBL_MACHINE_DETAILS} m
             WHERE m.MachineName = v.MachineName) AS vmName,
-            SUM(CASE 
+            SUM(CASE
                 WHEN ProcessStatus IN ('COMPLETED','FAILED')
                      AND CAST(EndTime AS DATE) = CAST(GETDATE() AS DATE)
                      AND StartTime IS NOT NULL
                 THEN 1 ELSE 0
                 END) AS completedTransactions,
-            SUM(CASE 
+            SUM(CASE
                 WHEN ProcessStatus IN ('COMPLETED','FAILED')
                      AND CAST(EndTime AS DATE) = CAST(GETDATE() AS DATE)
                      AND StartTime IS NOT NULL
                 THEN CAST(DATEDIFF(SECOND, StartTime, EndTime) AS FLOAT)/60.0
                 ELSE 0
                 END) AS completed_minutes,
-            SUM(CASE 
+            SUM(CASE
                 WHEN ProcessStatus = 'INPROGRESS'
                      AND CaseStatus = 'INPROGRESS'
                      AND StartTime IS NOT NULL
                 THEN CAST(DATEDIFF(SECOND, StartTime, GETDATE()) AS FLOAT)/60.0
                 ELSE 0
                 END) AS ongoing_minutes
-            FROM [RPA_CoE_Dev_Manna].[dbo].[VW_RPADashboard_New] v
+            FROM {VW_RPA_DASHBOARD} v
             WHERE MachineName IS NOT NULL
             GROUP BY MachineName
             ),
@@ -377,7 +378,7 @@ def get_vm_utilization(db: Session) -> dict:
                 FROM vm_stats
 
                 UNION ALL
-                     
+
             SELECT
             CASE
                 WHEN UserName LIKE '%.BOT%'
@@ -387,7 +388,7 @@ def get_vm_utilization(db: Session) -> dict:
             0,
             0,
             0
-            FROM [RPA_CoE_Dev_Manna].[dbo].[tblMachineDetails]
+            FROM {TBL_MACHINE_DETAILS}
                      )
 
             SELECT
@@ -478,16 +479,16 @@ def get_recently_completed_transactions(db: Session) -> dict:
         Each list contains: transactionId, machineName, processName, processStatus, caseStatus
     """
     try:
-        query = text("""
+        query = text(f"""
             WITH recently_completed AS (
                 SELECT              --TOP 50
                     ProcessTransactionId as transactionId,
                     MachineName as machineName,
                     ProcessName as processName,
-                    ProcessStatus, 
+                    ProcessStatus,
                     CaseStatus,
                     EndTime
-                FROM VW_RPADashboard_New
+                FROM {VW_RPA_DASHBOARD}
                 WHERE EndTime IS NOT NULL
                   AND MachineName IS NOT NULL
                   AND ProcessTransactionId IS NOT NULL
@@ -572,7 +573,7 @@ def get_vm_completed_transactions(db: Session) -> list:
         ]
     """
     try:
-        query = text("""
+        query = text(f"""
             SELECT
                 MachineName as machineName,
                 ProcessTransactionId as transactionId,
@@ -580,7 +581,7 @@ def get_vm_completed_transactions(db: Session) -> list:
                 CaseStatus as caseStatus,
                 FORMAT(StartTime, 'yyyy-MM-dd HH:mm:ss') as startTime,
                 FORMAT(EndTime, 'yyyy-MM-dd HH:mm:ss') as endTime
-            FROM VW_RPADashboard_New
+            FROM {VW_RPA_DASHBOARD}
             WHERE EndTime IS NOT NULL
               AND MachineName IS NOT NULL
               AND ProcessTransactionId IS NOT NULL
