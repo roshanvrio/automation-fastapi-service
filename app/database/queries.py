@@ -3,8 +3,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 # View and Table names
-VW_RPA_DASHBOARD = "VW_process_transactions"
-TBL_MACHINE_DETAILS = "vm_pool"
+VW_RPA_DASHBOARD = "VW_RPA_DASHBOARD_New"
+TBL_MACHINE_DETAILS = "tblMachineDetails"
 
 def get_metrics(db: Session) -> dict:
     try:
