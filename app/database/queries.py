@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 # View and Table names
-VW_RPA_DASHBOARD = "VW_RPADashboard_New"
+VW_RPA_DASHBOARD = "VW_process_transactions"
 TBL_MACHINE_DETAILS = "tblMachineDetails"
 
 def get_metrics(db: Session) -> dict:
@@ -87,7 +87,7 @@ def get_queue_priority(db: Session):
                  THEN 'Email'
             ELSE 'Scheduled'
         END AS triggerIndication
-    FROM VW_RPADashboard_New
+    FROM {VW_RPA_DASHBOARD}
         WHERE ProcessTransactionId IS NOT NULL
       AND ProcessStatus != 'ABORT'
       AND CaseStatus != 'ABORT'
@@ -302,7 +302,7 @@ FROM idle_vms
 #                         AND StartTime IS NOT NULL
 #                     THEN CAST(DATEDIFF(SECOND, StartTime, GETDATE())/60.0 AS FLOAT) ELSE 0
 #                 END) AS ongoing_minutes
-#             FROM VW_RPADashboard_New
+#             FROM {VW_RPA_DASHBOARD}
 #             WHERE MachineName IS NOT NULL
 #             GROUP BY MachineName
 #                      )
@@ -561,12 +561,19 @@ def get_vm_completed_transactions(db: Session) -> list:
     try:
         query = text(f"""
             SELECT
-                MachineName as machineName,
+                COALESCE(
+                    CASE
+                        WHEN MachineName LIKE '%.BOT%'
+                        THEN LEFT(MachineName, CHARINDEX('.BOT', MachineName) - 1)
+                        ELSE MachineName
+                    END,
+                    MachineName
+                ) AS machineName,
                 ProcessTransactionId as transactionId,
                 ProcessName as processName,
                 CaseStatus as caseStatus,
-                FORMAT(StartTime, 'yyyy-MM-dd HH:mm:ss') as startTime,
-                FORMAT(EndTime, 'yyyy-MM-dd HH:mm:ss') as endTime
+                FORMAT(StartTime, 'HH:mm:ss') as startTime,
+                FORMAT(EndTime, 'HH:mm:ss') as endTime
             FROM {VW_RPA_DASHBOARD}
             WHERE EndTime IS NOT NULL
               AND MachineName IS NOT NULL
