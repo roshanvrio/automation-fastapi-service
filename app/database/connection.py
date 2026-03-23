@@ -1,6 +1,7 @@
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 import os
+import asyncio
 from dotenv import load_dotenv
 import urllib
 
@@ -50,3 +51,15 @@ def update_database_name(database_name: str):
     SessionLocal = sessionmaker(autocommit = False, autoflush = False, bind = engine)
 
     print(f"Database URL updated to use database: {database_name}")
+
+
+PROD_TABLE = os.getenv("PROD_TABLE", "dbo.VW_RPADashboard_New")
+
+
+async def async_execute(query_text, params=None):
+    def run_query():
+        with SessionLocal() as session:
+            result = session.execute(text(query_text), params or {})
+            return [dict(row._mapping) for row in result]
+
+    return await asyncio.to_thread(run_query)
