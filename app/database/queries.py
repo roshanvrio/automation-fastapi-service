@@ -33,22 +33,17 @@ def get_metrics(db: Session) -> dict:
                     THEN 1 ELSE 0
                     END) AS total_in_queue,
 
-                Round(AVG(
-                    CASE
-                        WHEN StartTime IS NOT NULL
-                             AND EndTime IS NOT NULL
-                             AND EndTime > StartTime
-                             -- AND CAST(EndTime AS DATE) = CAST(GETDATE() AS DATE)
-                             AND ProcessStatus IN ('COMPLETED','FAILED')
-                        THEN CAST(DATEDIFF(Minute, StartTime, EndTime) AS FLOAT)
+                SUM(CASE
+                    WHEN ProcessStatus IN ('COMPLETED','FAILED')
+                         AND CAST(EndTime AS DATE) = CAST(GETDATE() AS DATE)
+                    THEN 1 ELSE 0
+                    END) AS total_completed,
 
-                        -- WHEN StartTime IS NOT NULL
-                              --AND ProcessStatus = 'INPROGRESS'
-                        --THEN DATEDIFF(SECOND, StartTime, GETDATE()) / 60.0
-
-                        --ELSE NULL
-                    END
-                ),2) AS avg_time
+                SUM(CASE
+                    WHEN ProcessStatus = 'INPROGRESS'
+                         AND CaseStatus = 'INPROGRESS'
+                    THEN 1 ELSE 0
+                    END) AS in_progress
 
             FROM {VW_RPA_DASHBOARD}
             WHERE ProcessTransactionId IS NOT NULL
@@ -61,7 +56,8 @@ def get_metrics(db: Session) -> dict:
             "successful": result.successful or 0,
             "totalInQueue": result.total_in_queue or 0,
             "errors": result.errors or 0,
-            "avgTime": result.avg_time or 0
+            "totalCompleted": result.total_completed or 0,
+            "inProgress": result.in_progress or 0
         }
     except Exception as e:
         print(f"Error in get_metrics: {e}")
@@ -70,9 +66,63 @@ def get_metrics(db: Session) -> dict:
             "successful": 0,
             "totalInQueue": 0,
             "errors": 0,
-            "avgTime": 0
+            "totalCompleted": 0,
+            "inProgress": 0
         }
     
+def get_process_completed(db: Session) -> list:
+    try:
+        query = text(f"""
+            WITH CompletedCounts AS (
+                SELECT
+                    ProcessName AS processName,
+                    RPATool AS rpaTool,
+                    COUNT(*) AS completedCount
+                FROM {VW_RPA_DASHBOARD}
+                WHERE ProcessTransactionId IS NOT NULL
+                  AND ProcessStatus IN ('COMPLETED','FAILED')
+                  AND CaseStatus IN ('SUCCESS','ERROR','EXCEPTION')
+                  AND CAST(EndTime AS DATE) = CAST(GETDATE() AS DATE)
+                GROUP BY ProcessName, RPATool
+            ),
+            TriggerInfo AS (
+                SELECT
+                    ProcessName,
+                    CASE
+                        WHEN SUM(CASE WHEN EmailFrom IS NOT NULL THEN 1 ELSE 0 END) > 0
+                             THEN 'Email'
+                        ELSE 'Scheduled'
+                    END AS triggerIndication
+                FROM {VW_RPA_DASHBOARD}
+                WHERE ProcessTransactionId IS NOT NULL
+                GROUP BY ProcessName
+            )
+            SELECT
+                c.processName,
+                c.rpaTool,
+                c.completedCount,
+                t.triggerIndication
+            FROM CompletedCounts c
+            LEFT JOIN TriggerInfo t ON c.processName = t.ProcessName
+            ORDER BY c.completedCount DESC
+        """)
+
+        results = db.execute(query).fetchall()
+
+        return [
+            {
+                "processName": row.processName,
+                "rpaTool": row.rpaTool,
+                "completedCount": row.completedCount,
+                "triggerIndication": row.triggerIndication
+            }
+            for row in results
+        ]
+
+    except Exception as e:
+        print(f"Error in get_process_completed: {e}")
+        return []
+
 def get_queue_priority(db: Session):
     try:
         query = text(f"""
