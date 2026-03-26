@@ -77,7 +77,9 @@ def get_process_completed(db: Session) -> list:
                 SELECT
                     ProcessName AS processName,
                     RPATool AS rpaTool,
-                    COUNT(*) AS completedCount
+                    SUM(CASE WHEN CaseStatus = 'SUCCESS' THEN 1 ELSE 0 END) AS successCount,
+                    SUM(CASE WHEN CaseStatus = 'EXCEPTION' THEN 1 ELSE 0 END) AS exceptionCount,
+                    SUM(CASE WHEN CaseStatus = 'ERROR' THEN 1 ELSE 0 END) AS errorCount
                 FROM {VW_RPA_DASHBOARD}
                 WHERE ProcessTransactionId IS NOT NULL
                   AND ProcessStatus IN ('COMPLETED','FAILED')
@@ -100,11 +102,13 @@ def get_process_completed(db: Session) -> list:
             SELECT
                 c.processName,
                 c.rpaTool,
-                c.completedCount,
+                c.successCount,
+                c.exceptionCount,
+                c.errorCount,
                 t.triggerIndication
             FROM CompletedCounts c
             LEFT JOIN TriggerInfo t ON c.processName = t.ProcessName
-            ORDER BY c.completedCount DESC
+            ORDER BY (c.successCount + c.exceptionCount + c.errorCount) DESC
         """)
 
         results = db.execute(query).fetchall()
@@ -113,7 +117,9 @@ def get_process_completed(db: Session) -> list:
             {
                 "processName": row.processName,
                 "rpaTool": row.rpaTool,
-                "completedCount": row.completedCount,
+                "successCount": row.successCount,
+                "exceptionCount": row.exceptionCount,
+                "errorCount": row.errorCount,
                 "triggerIndication": row.triggerIndication
             }
             for row in results
