@@ -3,52 +3,67 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 # View and Table names
-VW_RPA_DASHBOARD = "VW_process_transactions"
+VW_RPA_DASHBOARD = "VW_RPADashboard_New"
 TBL_MACHINE_DETAILS = "tblMachineDetails"
 
 def get_metrics(db: Session) -> dict:
     try:
         query = text(f"""
-            SELECT
-                SUM(CASE
-                    WHEN CaseStatus = 'EXCEPTION'
-                         AND CAST(EndTime AS DATE) = CAST(GETDATE() AS DATE)
-                    THEN 1 ELSE 0
-                    END) AS exceptions,
+            WITH active_vms AS (
+    SELECT
+        SUM(CASE WHEN r.CaseStatus = 'EXCEPTION' THEN 1 END) AS exceptions,
+        SUM(CASE WHEN r.CaseStatus = 'SUCCESS'   THEN 1 END) AS successful,
+        SUM(CASE WHEN r.CaseStatus = 'ERROR'     THEN 1 END) AS errors,
+        ROUND(AVG(
+            CASE
+                WHEN r.ProcessStatus IN ('FAILED','COMPLETED')
+                THEN CAST(DATEDIFF(MINUTE, r.StartTime, r.EndTime) AS FLOAT)
+            END
+        ), 2) AS avg_time
+    FROM VW_RPADashboard_New r
+    JOIN tblMachineDetails md
+        ON r.MachineName = md.UserName
+    WHERE r.ProcessTransactionId IS NOT NULL
+      AND r.EndTime IS NOT NULL
+      AND r.EndTime > r.StartTime
+      AND r.ProcessStatus IN ('COMPLETED','FAILED')
+      AND r.CaseStatus IN ('ERROR','EXCEPTION','SUCCESS')
+      AND md.Active = 1
+      AND r.EndTime >= CAST(GETDATE() AS DATE)
+      AND r.EndTime < DATEADD(DAY, 1, CAST(GETDATE() AS DATE))
+),
 
-                SUM(CASE
-                    WHEN CaseStatus = 'SUCCESS'
-                         AND CAST(EndTime AS DATE) = CAST(GETDATE() AS DATE)
-                    THEN 1 ELSE 0
-                    END) AS successful,
+in_queue AS (
+    SELECT
+        COUNT(ProcessTransactionId) AS total_in_queue
+    FROM VW_RPADashboard_New
+    WHERE ProcessTransactionId IS NOT NULL
+      AND ProcessStatus = 'NEW'
+      AND CaseStatus = 'NEW'
+),
+in_progress AS (
+    SELECT
+        COUNT(ProcessTransactionId) AS in_progress
+    FROM VW_RPADashboard_New r
+    JOIN tblMachineDetails md 
+        ON r.MachineName = md.UserName
+    WHERE r.ProcessStatus = 'INPROGRESS'
+      AND r.CaseStatus = 'INPROGRESS'
+      AND md.Active = 1
+)
 
-                SUM(CASE
-                    WHEN CaseStatus = 'ERROR'
-                         AND CAST(EndTime AS DATE) = CAST(GETDATE() AS DATE)
-                    THEN 1 ELSE 0
-                    END) AS errors,
-                SUM(CASE
-                    WHEN ProcessStatus = 'NEW'
-                        AND CaseStatus= 'NEW'
-                    THEN 1 ELSE 0
-                    END) AS total_in_queue,
-
-                SUM(CASE
-                    WHEN ProcessStatus IN ('COMPLETED','FAILED')
-                         AND CAST(EndTime AS DATE) = CAST(GETDATE() AS DATE)
-                    THEN 1 ELSE 0
-                    END) AS total_completed,
-
-                SUM(CASE
-                    WHEN ProcessStatus = 'INPROGRESS'
-                         AND CaseStatus = 'INPROGRESS'
-                    THEN 1 ELSE 0
-                    END) AS in_progress
-
-            FROM {VW_RPA_DASHBOARD}
-            WHERE ProcessTransactionId IS NOT NULL
-        """)
-
+SELECT 
+    a.exceptions,
+    a.successful,
+    a.errors,
+    i.total_in_queue,
+    ip.in_progress,
+    a.avg_time,
+    (a.exceptions + a.successful + a.errors) AS total_completed
+FROM active_vms a
+CROSS JOIN in_queue i
+CROSS JOIN in_progress ip
+""")
         result = db.execute(query).fetchone()
 
         return {
@@ -74,41 +89,38 @@ def get_process_completed(db: Session) -> list:
     try:
         query = text(f"""
             WITH CompletedCounts AS (
-                SELECT
-                    ProcessName AS processName,
-                    RPATool AS rpaTool,
-                    SUM(CASE WHEN CaseStatus = 'SUCCESS' THEN 1 ELSE 0 END) AS successCount,
-                    SUM(CASE WHEN CaseStatus = 'EXCEPTION' THEN 1 ELSE 0 END) AS exceptionCount,
-                    SUM(CASE WHEN CaseStatus = 'ERROR' THEN 1 ELSE 0 END) AS errorCount
-                FROM {VW_RPA_DASHBOARD}
-                WHERE ProcessTransactionId IS NOT NULL
-                  AND ProcessStatus IN ('COMPLETED','FAILED')
-                  AND CaseStatus IN ('SUCCESS','ERROR','EXCEPTION')
-                  AND CAST(EndTime AS DATE) = CAST(GETDATE() AS DATE)
-                GROUP BY ProcessName, RPATool
-            ),
-            TriggerInfo AS (
-                SELECT
-                    ProcessName,
-                    CASE
-                        WHEN SUM(CASE WHEN EmailFrom IS NOT NULL THEN 1 ELSE 0 END) > 0
-                             THEN 'Email'
-                        ELSE 'Scheduled'
-                    END AS triggerIndication
-                FROM {VW_RPA_DASHBOARD}
-                WHERE ProcessTransactionId IS NOT NULL
-                GROUP BY ProcessName
-            )
-            SELECT
-                c.processName,
-                c.rpaTool,
-                c.successCount,
-                c.exceptionCount,
-                c.errorCount,
-                t.triggerIndication
-            FROM CompletedCounts c
-            LEFT JOIN TriggerInfo t ON c.processName = t.ProcessName
-            ORDER BY (c.successCount + c.exceptionCount + c.errorCount) DESC
+    SELECT
+        r.ProcessName,
+        CASE 
+            WHEN r.EmailFrom IS NOT NULL THEN 'Email Trigger'
+            ELSE 'File Trigger'
+        END AS TriggerIndication,
+        SUM(CASE WHEN r.CaseStatus = 'EXCEPTION' THEN 1 ELSE 0 END) AS exceptions,
+        SUM(CASE WHEN r.CaseStatus = 'SUCCESS'   THEN 1 ELSE 0 END) AS successful,
+        SUM(CASE WHEN r.CaseStatus = 'ERROR'     THEN 1 ELSE 0 END) AS errors
+    FROM VW_RPADashboard_New r
+    JOIN tblMachineDetails md
+        ON r.MachineName = md.UserName
+    WHERE r.ProcessTransactionId IS NOT NULL
+      AND r.EndTime IS NOT NULL
+      AND r.EndTime > r.StartTime
+      AND r.ProcessStatus IN ('COMPLETED','FAILED')
+      AND r.CaseStatus IN ('ERROR','EXCEPTION','SUCCESS')
+      AND md.Active = 1
+      AND r.EndTime >= CAST(GETDATE() AS DATE)
+      AND r.EndTime < DATEADD(DAY, 1, CAST(GETDATE() AS DATE))
+    GROUP BY r.ProcessName,
+             CASE WHEN r.EmailFrom IS NOT NULL THEN 'Email Trigger' ELSE 'File Trigger' END
+)
+SELECT
+    a.ProcessName,
+    a.TriggerIndication,
+    a.exceptions,
+    a.successful,
+    a.errors,
+    (a.exceptions + a.successful + a.errors) AS total_completed
+FROM CompletedCounts a
+ORDER BY a.ProcessName, a.TriggerIndication
         """)
 
         results = db.execute(query).fetchall()
@@ -116,7 +128,6 @@ def get_process_completed(db: Session) -> list:
         return [
             {
                 "processName": row.processName,
-                "rpaTool": row.rpaTool,
                 "successCount": row.successCount,
                 "exceptionCount": row.exceptionCount,
                 "errorCount": row.errorCount,
