@@ -113,14 +113,14 @@ def get_process_completed(db: Session) -> list:
              CASE WHEN r.EmailFrom IS NOT NULL THEN 'Email Trigger' ELSE 'File Trigger' END
 )
 SELECT
-    a.ProcessName,
-    a.TriggerIndication,
-    a.exceptions,
-    a.successful,
-    a.errors,
+    a.processName,
+    a.triggerIndication,
+    a.exceptions as exceptionCount,
+    a.successful as successCount,
+    a.errors as errorCount,
     (a.exceptions + a.successful + a.errors) AS total_completed
 FROM CompletedCounts a
-ORDER BY a.ProcessName, a.TriggerIndication
+ORDER BY a.ProcessName, a.triggerIndication
         """)
 
         results = db.execute(query).fetchall()
@@ -546,6 +546,7 @@ def get_recently_completed_transactions(db: Session) -> dict:
                   AND MachineName IS NOT NULL
                   AND ProcessTransactionId IS NOT NULL
                   AND CaseStatus IN ('SUCCESS', 'ERROR', 'EXCEPTION')
+                  AND ProcessStatus IN ('COMPLETED','FAILED')
                   --AND CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
                 --ORDER BY EndTime DESC
             )
@@ -639,14 +640,16 @@ def get_vm_completed_transactions(db: Session) -> list:
                 ProcessTransactionId as transactionId,
                 ProcessName as processName,
                 CaseStatus as caseStatus,
-                FORMAT(StartTime, 'HH:mm:ss') as startTime,
-                FORMAT(EndTime, 'HH:mm:ss') as endTime
+                FORMAT(StartTime, 'yyyy-MM-dd HH:mm:ss') as startTime,
+                FORMAT(EndTime, 'yyyy-MM-dd HH:mm:ss') as endTime
             FROM {VW_RPA_DASHBOARD}
-            WHERE EndTime IS NOT NULL
-              AND MachineName IS NOT NULL
+            WHERE EndTime IS NOT NULL AND
+               MachineName IS NOT NULL
               AND ProcessTransactionId IS NOT NULL
               AND CaseStatus IN ('SUCCESS', 'ERROR', 'EXCEPTION')
-              --AND CAST(CreatedDate AS DATE) = CAST(GETDATE() AS DATE)
+              AND ProcessStatus IN ('COMPLETED','FAILED')
+            AND EndTime >= DATEADD(DAY, DATEDIFF(DAY, 0, GETDATE()), 0) -- today’s start
+           AND EndTime <= GETDATE() 
             ORDER BY MachineName ASC, EndTime DESC
         """)
 
