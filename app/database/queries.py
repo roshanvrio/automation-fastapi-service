@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 # View and Table names
-VW_RPA_DASHBOARD = "VW_RPADashboard_New"
+VW_RPA_DASHBOARD = "VW_process_transactions"
 TBL_MACHINE_DETAILS = "tblMachineDetails"
 
 def get_metrics(db: Session) -> dict:
@@ -20,7 +20,7 @@ def get_metrics(db: Session) -> dict:
                 THEN CAST(DATEDIFF(MINUTE, r.StartTime, r.EndTime) AS FLOAT)
             END
         ), 2) AS avg_time
-    FROM VW_RPADashboard_New r
+    FROM {VW_RPA_DASHBOARD} r
     JOIN tblMachineDetails md
         ON r.MachineName = md.UserName
     WHERE r.ProcessTransactionId IS NOT NULL
@@ -36,7 +36,7 @@ def get_metrics(db: Session) -> dict:
 in_queue AS (
     SELECT
         COUNT(ProcessTransactionId) AS total_in_queue
-    FROM VW_RPADashboard_New
+    FROM {VW_RPA_DASHBOARD}
     WHERE ProcessTransactionId IS NOT NULL
       AND ProcessStatus = 'NEW'
       AND CaseStatus = 'NEW'
@@ -44,7 +44,7 @@ in_queue AS (
 in_progress AS (
     SELECT
         COUNT(ProcessTransactionId) AS in_progress
-    FROM VW_RPADashboard_New r
+    FROM {VW_RPA_DASHBOARD} r
     JOIN tblMachineDetails md 
         ON r.MachineName = md.UserName
     WHERE r.ProcessStatus = 'INPROGRESS'
@@ -92,13 +92,13 @@ def get_process_completed(db: Session) -> list:
     SELECT
         r.ProcessName,
         CASE 
-            WHEN r.EmailFrom IS NOT NULL THEN 'Email Trigger'
-            ELSE 'File Trigger'
+            WHEN r.EmailFrom IS NOT NULL THEN 'Email'
+            ELSE 'Scheduled'
         END AS TriggerIndication,
         SUM(CASE WHEN r.CaseStatus = 'EXCEPTION' THEN 1 ELSE 0 END) AS exceptions,
         SUM(CASE WHEN r.CaseStatus = 'SUCCESS'   THEN 1 ELSE 0 END) AS successful,
         SUM(CASE WHEN r.CaseStatus = 'ERROR'     THEN 1 ELSE 0 END) AS errors
-    FROM VW_RPADashboard_New r
+    FROM {VW_RPA_DASHBOARD} r
     JOIN tblMachineDetails md
         ON r.MachineName = md.UserName
     WHERE r.ProcessTransactionId IS NOT NULL
@@ -110,7 +110,7 @@ def get_process_completed(db: Session) -> list:
       AND r.EndTime >= CAST(GETDATE() AS DATE)
       AND r.EndTime < DATEADD(DAY, 1, CAST(GETDATE() AS DATE))
     GROUP BY r.ProcessName,
-             CASE WHEN r.EmailFrom IS NOT NULL THEN 'Email Trigger' ELSE 'File Trigger' END
+             CASE WHEN r.EmailFrom IS NOT NULL THEN 'Email' ELSE 'Scheduled' END
 )
 SELECT
     a.processName,
@@ -165,7 +165,7 @@ def get_queue_priority(db: Session):
                  THEN 'Email'
             ELSE 'Scheduled'
         END AS triggerIndication
-    FROM VW_RPADashboard_New
+    FROM {VW_RPA_DASHBOARD}
     WHERE ProcessTransactionId IS NOT NULL
       AND ProcessStatus != 'ABORT'
       AND CaseStatus != 'ABORT'
