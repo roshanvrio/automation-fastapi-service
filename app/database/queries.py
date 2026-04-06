@@ -147,15 +147,26 @@ def get_queue_priority(db: Session):
     SELECT
         ProcessName AS processName,
         RPATool AS rpaTool,
-        COUNT(ProcessTransactionId) AS totalCount,
-        SUM(CASE WHEN ProcessStatus = 'NEW' AND CaseStatus = 'NEW' THEN 1 ELSE 0 END) AS inQueueCount,
+        COUNT(
+            CASE 
+                  WHEN StartTime >= CAST(GETDATE() AS DATE) 
+                THEN ProcessTransactionId 
+            END
+        ) AS totalCount,
+        SUM(
+            CASE 
+                WHEN ProcessStatus = 'NEW' AND CaseStatus = 'NEW' 
+                THEN 1 
+                ELSE 0 
+            END
+        ) AS inQueueCount,
         CASE 
             WHEN SUM(CASE WHEN EmailFrom IS NOT NULL THEN 1 ELSE 0 END) > 0 
                  THEN 'Email'
             ELSE 'Scheduled'
         END AS triggerIndication
-    FROM {VW_RPA_DASHBOARD}
-        WHERE ProcessTransactionId IS NOT NULL
+    FROM VW_RPADashboard_New
+    WHERE ProcessTransactionId IS NOT NULL
       AND ProcessStatus != 'ABORT'
       AND CaseStatus != 'ABORT'
     GROUP BY ProcessName, RPATool
@@ -393,7 +404,7 @@ FROM idle_vms
 def get_vm_utilization(db: Session) -> dict:
     try:
         query = text(f"""
-           WITH vm_stats AS (
+            WITH vm_stats AS (
     SELECT
         CASE
             WHEN r.MachineName LIKE '%.BOT%'
@@ -402,21 +413,22 @@ def get_vm_utilization(db: Session) -> dict:
         END AS vmName,
         SUM(CASE
             WHEN r.ProcessStatus IN ('COMPLETED','FAILED')
-                 AND CAST(r.EndTime AS DATE) = CAST(GETDATE() AS DATE)
+                 AND StartTime >= CAST(GETDATE() AS DATE) 
+                 AND EndTime < DATEADD(DAY, 1, CAST(GETDATE() AS DATE)) 
                  AND r.StartTime IS NOT NULL
             THEN 1 ELSE 0
         END) AS completedTransactions,
         SUM(CASE
             WHEN r.ProcessStatus IN ('COMPLETED','FAILED')
-                 AND CAST(r.EndTime AS DATE) = CAST(GETDATE() AS DATE)
-                 AND r.StartTime IS NOT NULL
+                AND StartTime >= CAST(GETDATE() AS DATE) 
+                 AND EndTime < DATEADD(DAY, 1, CAST(GETDATE() AS DATE)) 
             THEN DATEDIFF(SECOND, r.StartTime, r.EndTime)/60.0
             ELSE 0
         END) AS completed_minutes,
         SUM(CASE
             WHEN r.ProcessStatus = 'INPROGRESS'
                  AND r.CaseStatus = 'INPROGRESS'
-                 AND r.StartTime IS NOT NULL
+                 AND StartTime >= CAST(GETDATE() AS DATE)
             THEN DATEDIFF(SECOND, r.StartTime, GETDATE())/60.0
             ELSE 0
         END) AS ongoing_minutes
